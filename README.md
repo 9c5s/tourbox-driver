@@ -294,7 +294,7 @@ Windows で `output` と `input` に同じ loopMIDI のポートを指定する�
 
 また、出力と入力の一方の名前が、他方の名前に含まれないようにする (接頭辞になる場合を含む)。
 ポートの選択は部分一致を許す。
-また Windows では、名前が `MIDI` になる loopMIDI の出力ポートを入力ポートの名前で選ぶ。
+Windows では、名前が `MIDI` になる loopMIDI の出力ポートを、入力ポートの名前で選ぶ。
 入力ポートの名前の末尾には番号が付くので、完全一致による優先も働かない。
 たとえば出力の名前を `TourBox MIDI`、入力の名前を `TourBox MIDI In` にすると、`output` の `TourBox MIDI` は入力ポートの `TourBox MIDI [1]` と `TourBox MIDI In [1]` の両方に一致する。
 このとき本アプリは一覧で先にある入力ポートと同じ機器の出力ポートを開くので、出力が `TourBox MIDI In` の出力ポートになることがある。
