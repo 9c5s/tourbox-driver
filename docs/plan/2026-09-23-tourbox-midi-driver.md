@@ -18,7 +18,7 @@
 ## Global Constraints
 
 - 対象 OS は Windows と macOS。CI は windows-latest と macos-latest の両方で実行する
-- `cargo fmt --check`、`cargo clippy --all-targets -- -D warnings`、`cargo test` を CI と lefthook の pre-commit で実行する
+- `cargo fmt --check`、`cargo clippy --all-targets -- -D warnings`、`cargo test`、`cargo lint-adr` (ADR の形式検査、ADR-0012) を CI と lefthook の pre-commit で実行する
 - コミットは Conventional Commits (`type: 日本語の要約` の 1 行、body なし)
 - コード内コメントは日本語の常体、ログとエラーメッセージと README は敬体
 - ライブラリ `tourbox` は midir に依存しない。実行ファイル `tourbox-midi` は protocol のバイト値を直接扱わない
@@ -42,17 +42,17 @@
 ### Task 1: リポジトリとワークスペースの骨組み
 
 **Files:**
-- Create: `Cargo.toml` (workspace)、`crates/tourbox/Cargo.toml`、`crates/tourbox/src/lib.rs`、`crates/tourbox-midi/Cargo.toml`、`crates/tourbox-midi/src/lib.rs`、`crates/tourbox-midi/src/main.rs`
-- Create: `.gitignore`、`lefthook.yml`、`.github/workflows/ci.yml`、`README.md` (骨組み)
-- 既存: `docs/protocol/haptic-captures.md`、`docs/spec/`、`docs/plan/` (コミット済み)
+- Modify: `Cargo.toml` (workspace。`xtask` だけが members にあるので 2 クレートを追加する)、`lefthook.yml` (fmt、clippy、test、lint-adr、commit-msg は作成済み。glob の見直しだけ行う)
+- Create: `crates/tourbox/Cargo.toml`、`crates/tourbox/src/lib.rs`、`crates/tourbox-midi/Cargo.toml`、`crates/tourbox-midi/src/lib.rs`、`crates/tourbox-midi/src/main.rs`
+- Create: `.github/workflows/ci.yml`、`README.md` (骨組み)
+- 既存: `.gitignore`、`.cargo/config.toml` (`cargo lint-adr` のエイリアス)、`xtask/` (ADR の形式検査)、`docs/adr/`、`docs/protocol/haptic-captures.md`、`docs/spec/`、`docs/plan/` (コミット済み)
 
 **Interfaces:**
 - Produces: 2 クレートの空の骨組み。`tourbox` は `fake` feature を宣言し、dev-dependencies で自クレートを `features = ["fake"]` で参照する。`tourbox-midi` は lib と main の 2 ターゲットを持ち、main は lib の `run_cli()` を呼ぶだけにする
 
-- [ ] `git init` し、既定ブランチを main にする
-- [ ] ワークスペースと 2 クレートを作り、`cargo build` と `cargo test` が通ることを確認する (テストは 0 件でよい)
-- [ ] lefthook.yml に pre-commit (fmt、clippy、test) と commit-msg (Conventional Commits の正規表現) を書き、`lefthook install` を実行する
-- [ ] CI ワークフローに windows-latest と macos-latest のマトリクスで fmt、clippy、test を書く
+- [ ] ワークスペースに 2 クレートを追加し、`cargo build` と `cargo test` が通ることを確認する (新クレートのテストは 0 件でよい。xtask のテストは既にある)
+- [ ] `lefthook install` が済んでいることを確認し、lefthook.yml の glob が新クレートを含むことを確認する
+- [ ] CI ワークフローに windows-latest と macos-latest のマトリクスで fmt、clippy、test、lint-adr を書く
 - [ ] README に目的、対象 OS、lefthook の導入手順 (winget / brew)、loopMIDI の案内、macOS の Bluetooth 権限 (設計書 4.3 節) の案内を書く
 - [ ] コミット (`chore: ワークスペースと CI の骨組みを追加`)
 
