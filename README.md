@@ -26,28 +26,22 @@ clone した後に、リポジトリの直下で次のコマンドを 1 回実�
 lefthook install
 ```
 
-以後はコミットのたびに、CI と同じチェック (`cargo fmt`、`cargo clippy`、`cargo test`、`cargo lint-adr`) と、コミットメッセージが Conventional Commits の形式 (`type: 要約`) であるかの検査を実行する。
+lefthook はコミット時に、ステージしたファイルに応じて CI と同じチェック (`cargo fmt`、`cargo build`、`cargo clippy`、`cargo test`、`cargo lint-adr`) を実行し、コミットメッセージが Conventional Commits の形式 (`type: 要約`) であるかを検査する。
 
 ## Windows の仮想 MIDI ポート
 
-Windows は OS 標準の機能では仮想 MIDI ポートを作成できない。
+Windows 10 には、仮想 MIDI ポートを作成する OS 標準の機能がない。
+Windows 11 では Windows MIDI Services が標準のループバックポートを提供するが、本アプリは Windows の版によらず loopMIDI を前提にする。
 [loopMIDI](https://www.tobias-erichsen.de/software/loopmidi.html) で仮想 MIDI ポートを作成しておき、本アプリはその既存ポートを選んで使う。
 この方式にした理由は [ADR-0004](docs/adr/0004-Windowsの仮想MIDIポートはloopMIDIを併用しteVirtualMIDISDKは組み込まない.md) に記録している。
 
 ## macOS の Bluetooth 権限
 
 macOS 11 以降で BLE 接続を使うには、本アプリを起動するターミナルアプリに Bluetooth の使用を許可する必要がある。
-「システム設定 > プライバシーとセキュリティ > Bluetooth」で、使用するターミナルアプリ (ターミナル、iTerm2 など) を許可する。
+使用するターミナルアプリ (ターミナル、iTerm2 など) を、次の画面で許可する。
 
-## 設定ファイル
-
-未記載である。
-設定ファイルの読込を実装した後に書く。
-
-## 受け入れ確認
-
-未記載である。
-全機能を実装した後に、手動で確認する手順を書く。
+- macOS 13 以降: 「システム設定 > プライバシーとセキュリティ > Bluetooth」
+- macOS 11 と 12: 「システム環境設定 > セキュリティとプライバシー > プライバシー > Bluetooth」
 
 ## 設計資料
 

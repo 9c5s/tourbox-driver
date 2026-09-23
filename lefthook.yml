@@ -7,6 +7,9 @@ pre-commit:
     - name: fmt
       glob: "{**/*.rs,**/Cargo.toml,rustfmt.toml}"
       run: cargo fmt --all -- --check
+    - name: build
+      glob: "{**/*.rs,**/Cargo.toml,Cargo.lock}"
+      run: cargo build
     - name: clippy
       glob: "{**/*.rs,**/Cargo.toml,Cargo.lock}"
       run: cargo clippy --all-targets -- -D warnings

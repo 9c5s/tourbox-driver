@@ -197,7 +197,8 @@ tourbox-driver/
 この境界により、ライブラリは実機なしで単体テストでき、将来別の出力を作るときもライブラリを変更せずに済む。
 
 テスト用のフェイク (4.2 節) はライブラリの `fake` feature で公開し、ライブラリ自身の統合テストでは dev-dependencies で自クレートを `features = ["fake"]` 付きで参照して有効にする。
-`cargo test` はワークスペース既定でこの feature を含めるよう、ワークスペースの設定で明示する。
+この自己参照により、`cargo test` の実行時は `fake` が有効になり、`cargo build` では無効になる。
+ワークスペース側の設定は加えない (ADR-0015)。
 
 ### 3.3 実行基盤と共通ライブラリ
 
@@ -294,6 +295,7 @@ btleplug の切断イベントを切断とみなす。
 **macOS の BLE 権限**
 
 btleplug の README によると、macOS 11 以降で BLE を使うには、アプリバンドルの Info.plist に `NSBluetoothAlwaysUsageDescription` を入れるか、コマンドラインアプリではそれを起動するターミナルアプリに「システム設定 > プライバシーとセキュリティ > Bluetooth」で権限を与える必要がある (https://github.com/deviceplug/btleplug#macos)。
+この設定画面の名称は macOS 13 以降のものであり、macOS 11 と 12 では「システム環境設定 > セキュリティとプライバシー > プライバシー > Bluetooth」である。
 本アプリはコマンドラインで配布するため、後者を README に書き、権限がない場合は ble 接続を失敗として扱ってログに案内を出す。
 
 ## 5. マッピングと設定ファイル (crates/tourbox-midi)
@@ -465,10 +467,10 @@ engine は出力ポートの状態を知らない。出力が待機中でも run
 
 ### 8.2 CI とローカルのチェック
 
-- GitHub Actions で windows-latest と macos-latest の両方で `cargo fmt --check`、`cargo clippy --all-targets -- -D warnings`、`cargo test` を実行する。
-- lefthook をリポジトリに置き、pre-commit で CI と同じ 3 つを実行する。commit-msg で Conventional Commits の形式 (`type: 要約`) を正規表現で検査する。Node などの追加依存は入れない。
+- GitHub Actions で windows-latest と macos-latest の両方で `cargo fmt --check`、`cargo build`、`cargo clippy --all-targets -- -D warnings`、`cargo test`、`cargo lint-adr` の 5 つを実行する。`cargo build` は `fake` feature を含まない出荷構成のコンパイル検査であり (ADR-0015)、`cargo lint-adr` は ADR の形式検査である (ADR-0012)。
+- lefthook をリポジトリに置き、pre-commit で CI と同じ 5 つを実行する。commit-msg で Conventional Commits の形式 (`type: 要約`) を正規表現で検査する。Node などの追加依存は入れない。
 - lefthook は crates.io にないため、Windows は `winget install evilmartians.lefthook`、macOS は `brew install lefthook` で入れる。README に手順とバージョンを書き、clone 後に `lefthook install` を 1 回実行する。
-- test の実行時間が問題になったら、test だけを pre-push に移す。
+- pre-commit の所要時間が問題になったら、build と test を pre-push に移す (ADR-0015)。
 
 ## 9. 手動の受け入れ確認
 
