@@ -344,6 +344,7 @@ knob = { cc = 1 }                       # 回転: 絶対 CC (既定)。内部値
 scroll = { cc = 2, mode = "relative" }  # 相対 CC。encoding は twos_complement (既定) か binary_offset
 dial = { cc = 3, step = 2, invert = true }
 knob_press = { note = 64 }              # 押込はボタンと同じ扱い (scroll_press、dial_press も同様)
+up = { note = 65 }                      # 十字キーは up、down、left、right
 [map.with.side]                         # Side を押している間だけ有効なレイヤ
 knob = { cc = 11 }
 top = { note = 70 }

@@ -7,7 +7,9 @@ license.workspace = true
 [dependencies]
 anyhow = "1.0.104"
 clap = { version = "4.6.7", features = ["derive"] }
+thiserror = "2.0.20"
 tokio = { version = "1.53.1", features = ["rt-multi-thread", "macros", "signal"] }
+toml = { version = "1.1.6", default-features = false, features = ["parse", "std"] }
 tourbox = { path = "../tourbox" }
 tracing = "0.1.44"
 tracing-subscriber = { version = "0.3.23", features = ["env-filter"] }

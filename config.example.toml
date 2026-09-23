@@ -1,0 +1,36 @@
+[device]
+transport = "auto"   # auto | usb | ble
+# usb_port = "COM3"  # auto と usb で使う明示指定。ble では無視
+
+[midi]
+output = "TourBox MIDI"      # macOS は仮想ポートをこの名前で作成、Windows は既存ポート名の部分一致で選択
+input = "TourBox MIDI In"    # ハプティクス制御の受信用。省略可
+channel = 1                  # 既定チャンネル (1〜16)
+
+[haptics]
+knob = { strength = "strong", speed = "medium" }
+scroll = { strength = "weak", speed = "fast" }
+dial = { strength = "off" }
+[haptics.with.side]          # 修飾と軸の組み合わせの上書き (省略時は軸の値を継承)
+knob = { strength = "weak" }
+
+[haptics.control]            # 受信 MIDI によるハプティクス制御 (6.2 節)
+channel = 16
+master = { cc = 99 }
+knob = { cc = 100 }
+scroll = { cc = 101, speed_cc = 102 }
+[haptics.control.with.side]
+knob = { cc = 110 }
+
+[map]
+tall = { note = 60 }                    # ボタン: Note On (押下) と Note Off (解放)。velocity 省略時 127
+top = { cc = 20 }                       # ボタンを CC にする場合: 押下 127、解放 0
+c1 = { note = 62, channel = 2 }         # チャンネルは項目ごとに上書き可
+knob = { cc = 1 }                       # 回転: 絶対 CC (既定)。内部値 0〜127、1 ノッチ 1 ずつ
+scroll = { cc = 2, mode = "relative" }  # 相対 CC。encoding は twos_complement (既定) か binary_offset
+dial = { cc = 3, step = 2, invert = true }
+knob_press = { note = 64 }              # 押込はボタンと同じ扱い (scroll_press、dial_press も同様)
+up = { note = 65 }                      # 十字キーは up、down、left、right
+[map.with.side]                         # Side を押している間だけ有効なレイヤ
+knob = { cc = 11 }
+top = { note = 70 }
