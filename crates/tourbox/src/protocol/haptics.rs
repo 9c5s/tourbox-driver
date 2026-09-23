@@ -77,6 +77,11 @@ const TEMPLATE: [u8; 94] = [
     0x00, 0x53, 0x00, 0x54, 0x00, 0xa8, 0x00, 0xa9, 0x00, 0xaa, 0x00, 0xab, 0x00, 0xfe,
 ];
 
+/// 値バイトのうち強度を表すビット。
+const STRENGTH_BITS: u8 = 0x0c;
+/// 値バイトのうち速度を表すビット。
+const SPEED_BITS: u8 = 0x03;
+
 /// 組み合わせの値バイトのメッセージ内オフセット (設計書 2.4 節の表)。
 fn value_offset(axis: Axis, modifier: Modifier) -> usize {
     let [knob, scroll, dial] = match modifier {
@@ -114,6 +119,18 @@ impl HapticConfig {
     /// 組み合わせ 1 つの強度と速度を設定する。
     pub fn set(&mut self, axis: Axis, modifier: Modifier, strength: Strength, speed: Speed) {
         self.message[value_offset(axis, modifier)] = strength.bits() + speed.bits();
+    }
+
+    /// 組み合わせ 1 つの強度だけを変え、速度は保つ。
+    pub fn set_strength(&mut self, axis: Axis, modifier: Modifier, strength: Strength) {
+        let value = &mut self.message[value_offset(axis, modifier)];
+        *value = *value & !STRENGTH_BITS | strength.bits();
+    }
+
+    /// 組み合わせ 1 つの速度だけを変え、強度は保つ。
+    pub fn set_speed(&mut self, axis: Axis, modifier: Modifier, speed: Speed) {
+        let value = &mut self.message[value_offset(axis, modifier)];
+        *value = *value & !SPEED_BITS | speed.bits();
     }
 
     /// 軸の全組み合わせの強度と速度を設定する。
@@ -209,6 +226,9 @@ mod tests {
                 ]
             })
     }
+
+    const STRENGTHS: [Strength; 3] = [Strength::Off, Strength::Weak, Strength::Strong];
+    const SPEEDS: [Speed; 3] = [Speed::Fast, Speed::Medium, Speed::Slow];
 
     /// 全組み合わせを同じ強度と速度にした設定。
     fn config_with_all(strength: Strength, speed: Speed) -> HapticConfig {
@@ -385,6 +405,54 @@ mod tests {
                 0x06,
                 "{axis:?} と {modifier:?} の組み合わせの値バイトは「弱、遅い」(0x06) である必要があります。"
             );
+        }
+    }
+
+    #[test]
+    fn set_strength_changes_only_strength_of_target_combination() {
+        for (axis, modifier, _) in spec_offsets() {
+            for before in STRENGTHS {
+                for speed in SPEEDS {
+                    for after in STRENGTHS {
+                        let mut config = config_with_all(Strength::Weak, Speed::Slow);
+                        config.set(axis, modifier, before, speed);
+                        let mut expected = config.clone();
+                        expected.set(axis, modifier, after, speed);
+
+                        config.set_strength(axis, modifier, after);
+
+                        assert_eq!(
+                            config.encode(),
+                            expected.encode(),
+                            "{axis:?} と {modifier:?} の組み合わせを「{before:?}、{speed:?}」から set_strength で {after:?} にすると、速度と他の組み合わせは保たれる必要があります。"
+                        );
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn set_speed_changes_only_speed_of_target_combination() {
+        for (axis, modifier, _) in spec_offsets() {
+            for strength in STRENGTHS {
+                for before in SPEEDS {
+                    for after in SPEEDS {
+                        let mut config = config_with_all(Strength::Weak, Speed::Slow);
+                        config.set(axis, modifier, strength, before);
+                        let mut expected = config.clone();
+                        expected.set(axis, modifier, strength, after);
+
+                        config.set_speed(axis, modifier, after);
+
+                        assert_eq!(
+                            config.encode(),
+                            expected.encode(),
+                            "{axis:?} と {modifier:?} の組み合わせを「{strength:?}、{before:?}」から set_speed で {after:?} にすると、強度と他の組み合わせは保たれる必要があります。"
+                        );
+                    }
+                }
+            }
         }
     }
 

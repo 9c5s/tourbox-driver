@@ -223,7 +223,7 @@ tourbox-driver/
 - `NOT_ALLOW_CONFIG`: ASCII 文字列 `<!not_allow_config!>` (20 バイト) の定数。
 - **NotAllowConfigDetector**: 受信のかたまりをまたいで逐次照合する検出器。`feed(&[u8]) -> bool` で、これまでに与えたバイト列の末尾に文字列が完成した時点で true を返す。内部には文字列長までの一致状態だけを持ち、`reset()` で初期化する。
 - **Strength** (Off、Weak、Strong) と **Speed** (Fast、Medium、Slow)、**Modifier** (なし + Button 14 種)。
-- **HapticConfig**: 「軸 × 修飾」ごとに強度と速度を持つ構造体。94 バイトへの組み立てを `encode()` で行い、軸単位でまとめて設定する `set_axis(axis, strength, speed)` (公式コンソールと同じ使い勝手) と、組み合わせ単位の `set(axis, modifier, strength, speed)` を持つ。
+- **HapticConfig**: 「軸 × 修飾」ごとに強度と速度を持つ構造体。94 バイトへの組み立てを `encode()` で行い、軸単位でまとめて設定する `set_axis(axis, strength, speed)` (公式コンソールと同じ使い勝手) と、組み合わせ単位の `set(axis, modifier, strength, speed)` を持つ。組み合わせ単位の部分更新として、強度だけを変える `set_strength(axis, modifier, strength)` と速度だけを変える `set_speed(axis, modifier, speed)` も持つ (6.2 節のハプティクス制御が使う)。
 
 ### 4.2 transport モジュール
 
