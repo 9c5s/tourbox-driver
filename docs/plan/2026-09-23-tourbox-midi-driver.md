@@ -20,7 +20,7 @@
 - 対象 OS は Windows と macOS。CI は windows-latest と macos-latest の両方で実行する
 - `cargo fmt --check`、`cargo clippy --all-targets -- -D warnings`、`cargo test`、`cargo lint-adr` (ADR の形式検査、ADR-0012) を CI と lefthook の pre-commit で実行する
 - コミットは Conventional Commits (`type: 日本語の要約` の 1 行、body なし)
-- 文書 (README、docs 配下、コード内コメント) はすべて日本語の常体で書く。プログラムの出力 (ログ、エラーメッセージ、CLI のヘルプ) は敬体
+- 文書 (README、docs 配下、コード内コメント) はすべて日本語の常体で書く。プログラムの出力 (ログ、エラーメッセージ、CLI のヘルプ) は敬体 (ADR-0013)
 - ライブラリ `tourbox` は midir に依存しない。実行ファイル `tourbox-midi` は protocol のバイト値を直接扱わない
 - ライセンス未指定のリポジトリ (jasonrohrer/tourBoxEliteLinuxDriver) のコードは流用しない
 - テストは要件を満たすことを目的にし、`docs/protocol/haptic-captures.md` の実機キャプチャを 94 バイトの期待値に使う (設計書 2.5 節、8.1 節)
