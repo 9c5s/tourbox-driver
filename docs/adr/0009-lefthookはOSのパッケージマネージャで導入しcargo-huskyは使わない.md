@@ -26,3 +26,4 @@ Node などの追加依存は入れない。
 
 - ツール自体の導入は cargo で管理できないが、設定は `lefthook.yml` 1 ファイルで分かりやすい。
 - test の実行時間が問題になったら、test だけを pre-push に移す。
+- 2026-09-23: pre-commit の検査に `cargo lint-adr` (ADR-0012) と `cargo build` (ADR-0015) を加え、5 つになった。pre-push へ移す候補も build と test の 2 つになる。上の決定と結果の該当箇所は両 ADR で置き換える。
