@@ -3,14 +3,14 @@
 use tokio::sync::mpsc;
 use tracing::{info, warn};
 
-use crate::midi::{self, MidiIn, PortMode};
+use crate::midi::{self, MidiIn, PortInfo, PortMode};
 
 /// 入力ポートの開き方と一覧の取得。
 pub trait InputBackend {
     type Port: InputPort;
 
-    /// 入力ポートの名前を一覧の順に返す。
-    fn list_names(&self) -> anyhow::Result<Vec<String>>;
+    /// 入力ポートの名前と ID を一覧の順に返す。
+    fn list_ports(&self) -> anyhow::Result<Vec<PortInfo>>;
 
     /// `name` の入力ポートを `mode` で開き、受信したバイト列を 1 メッセージずつ `tx` へ渡す。
     fn open(
@@ -26,6 +26,9 @@ pub trait InputPort {
     /// 開いているポートの名前。`Existing` では一致した既存のポートの名前である。
     fn port_name(&self) -> &str;
 
+    /// 開いているポートの ID。`Existing` で選んだ既存のポートの ID で、仮想ポートは None である。
+    fn port_id(&self) -> Option<&str>;
+
     fn close(self);
 }
 
@@ -36,8 +39,8 @@ pub struct MidiInBackend;
 impl InputBackend for MidiInBackend {
     type Port = MidiIn;
 
-    fn list_names(&self) -> anyhow::Result<Vec<String>> {
-        midi::list_input_names()
+    fn list_ports(&self) -> anyhow::Result<Vec<PortInfo>> {
+        midi::list_input_ports()
     }
 
     fn open(
@@ -53,6 +56,10 @@ impl InputBackend for MidiInBackend {
 impl InputPort for MidiIn {
     fn port_name(&self) -> &str {
         MidiIn::port_name(self)
+    }
+
+    fn port_id(&self) -> Option<&str> {
+        MidiIn::port_id(self)
     }
 
     fn close(self) {
@@ -87,7 +94,7 @@ impl<B: InputBackend> InputState<B> {
         }
     }
 
-    /// 未接続なら開き、`Existing` の接続中は一覧から選んだポートが消えていないかを調べる。
+    /// 未接続なら開き、`Existing` の接続中は選んだポートの ID が一覧から消えていないかを調べる。
     pub fn tick(&mut self) {
         let Some(port) = &self.port else {
             self.connect();
@@ -96,11 +103,15 @@ impl<B: InputBackend> InputState<B> {
         if self.mode == PortMode::Virtual {
             return;
         }
-        match self.backend.list_names() {
-            Ok(names) if names.iter().any(|name| name == port.port_name()) => {}
+        match self.backend.list_ports() {
+            Ok(ports)
+                if ports
+                    .iter()
+                    .any(|listed| port.port_id() == Some(&listed.id)) => {}
             Ok(_) => {
                 warn!(
                     port = port.port_name(),
+                    id = port.port_id().map(display),
                     "MIDI 入力ポートが一覧から消えました。ポートを閉じて再試行します。"
                 );
                 self.disconnect();
@@ -146,7 +157,7 @@ pub(crate) mod fake {
     use tokio::sync::mpsc;
 
     use super::{InputBackend, InputPort};
-    use crate::midi::PortMode;
+    use crate::midi::{PortInfo, PortMode};
 
     /// フェイクへの呼び出しの記録。
     #[derive(Debug, Clone, PartialEq, Eq)]
@@ -158,13 +169,21 @@ pub(crate) mod fake {
     }
 
     struct State {
-        /// 開けたときのポート名。None なら開けない。
-        openable: Option<String>,
+        /// 開けたときのポート。None なら開けない。
+        openable: Option<PortInfo>,
         /// 一覧の結果。None なら取得に失敗する。
-        listed: Option<Vec<String>>,
+        listed: Option<Vec<PortInfo>>,
         /// 開いているポートが受信したバイト列の送り先。None は開いているポートがない。
         tx: Option<mpsc::Sender<Vec<u8>>>,
         calls: Vec<Call>,
+    }
+
+    /// 名前だけを指定したポート。ID は名前と取り違えても一致しないよう、名前と異なる文字列にする。
+    fn named(name: &str) -> PortInfo {
+        PortInfo {
+            name: name.to_owned(),
+            id: format!("{name} の ID"),
+        }
     }
 
     /// 開く結果と一覧をテストから操作でき、開いたポートの受信を起こせる入力。複製は状態を共有する。
@@ -184,8 +203,8 @@ pub(crate) mod fake {
 
         fn with(port_name: Option<&str>) -> Self {
             Self(Rc::new(RefCell::new(State {
-                openable: port_name.map(str::to_owned),
-                listed: Some(port_name.into_iter().map(str::to_owned).collect()),
+                openable: port_name.map(named),
+                listed: Some(port_name.into_iter().map(named).collect()),
                 tx: None,
                 calls: Vec::new(),
             })))
@@ -193,13 +212,34 @@ pub(crate) mod fake {
 
         /// 開けたときのポート名を設定する。None なら開けなくする。
         pub(crate) fn set_openable(&self, port_name: Option<&str>) {
-            self.0.borrow_mut().openable = port_name.map(str::to_owned);
+            self.0.borrow_mut().openable = port_name.map(named);
+        }
+
+        /// 開けたときのポートを名前と ID で設定する。
+        pub(crate) fn set_openable_port(&self, name: &str, id: &str) {
+            self.0.borrow_mut().openable = Some(PortInfo {
+                name: name.to_owned(),
+                id: id.to_owned(),
+            });
         }
 
         /// 一覧の結果を設定する。None なら取得に失敗させる。
         pub(crate) fn set_listed(&self, names: Option<&[&str]>) {
             self.0.borrow_mut().listed =
-                names.map(|names| names.iter().map(|&name| name.to_owned()).collect());
+                names.map(|names| names.iter().map(|&name| named(name)).collect());
+        }
+
+        /// 一覧の結果を名前と ID の組で設定する。
+        pub(crate) fn set_listed_ports(&self, ports: &[(&str, &str)]) {
+            self.0.borrow_mut().listed = Some(
+                ports
+                    .iter()
+                    .map(|&(name, id)| PortInfo {
+                        name: name.to_owned(),
+                        id: id.to_owned(),
+                    })
+                    .collect(),
+            );
         }
 
         /// 開いているポートが `bytes` を受信したことにする。
@@ -222,7 +262,7 @@ pub(crate) mod fake {
     impl InputBackend for FakeBackend {
         type Port = FakePort;
 
-        fn list_names(&self) -> anyhow::Result<Vec<String>> {
+        fn list_ports(&self) -> anyhow::Result<Vec<PortInfo>> {
             let mut state = self.0.borrow_mut();
             state.calls.push(Call::List);
             state
@@ -239,12 +279,13 @@ pub(crate) mod fake {
         ) -> anyhow::Result<FakePort> {
             let mut state = self.0.borrow_mut();
             state.calls.push(Call::Open(name.to_owned(), mode));
-            let port_name = state.openable.clone().ok_or_else(|| {
+            let port = state.openable.clone().ok_or_else(|| {
                 anyhow::anyhow!("フェイクの入力ポート {name:?} が見つかりません。")
             })?;
             state.tx = Some(tx);
             Ok(FakePort {
-                name: port_name,
+                name: port.name,
+                id: port.id,
                 state: Rc::clone(&self.0),
             })
         }
@@ -252,12 +293,17 @@ pub(crate) mod fake {
 
     pub(crate) struct FakePort {
         name: String,
+        id: String,
         state: Rc<RefCell<State>>,
     }
 
     impl InputPort for FakePort {
         fn port_name(&self) -> &str {
             &self.name
+        }
+
+        fn port_id(&self) -> Option<&str> {
+            Some(&self.id)
         }
 
         fn close(self) {
@@ -363,7 +409,7 @@ mod tests {
     }
 
     #[test]
-    fn existing_mode_closes_port_when_its_name_disappears_and_reopens_when_it_returns() {
+    fn existing_mode_closes_port_when_it_disappears_and_reopens_when_it_returns() {
         let backend = FakeBackend::openable(PORT);
         backend.set_listed(Some(&["Microsoft GS Wavetable Synth", PORT]));
         let (tx, mut rx) = mpsc::channel(16);
@@ -375,7 +421,7 @@ mod tests {
         );
         input.tick();
 
-        // 設定名 TourBox In は一覧にないが、選んだポートの名前はある
+        // 設定名 TourBox In は一覧にないが、選んだポートはある
         input.tick();
         backend.set_listed(Some(&["Microsoft GS Wavetable Synth"]));
         backend.set_openable(None);
@@ -397,13 +443,49 @@ mod tests {
                 open("TourBox In", PortMode::Existing),
                 Call::List,
             ],
-            "選んだポートの名前が一覧から消えたら閉じて再試行し、再び現れたら開き直す必要があります。"
+            "選んだポートが一覧から消えたら閉じて再試行し、再び現れたら開き直す必要があります。"
         );
         backend.receive(&[0xb0, 1, 2]);
         assert_eq!(
             rx.try_recv(),
             Ok(vec![0xb0, 1, 2]),
             "開き直したポートの受信も同じチャネルへ届く必要があります。"
+        );
+    }
+
+    #[test]
+    fn existing_mode_judges_disappearance_by_id_even_if_same_name_is_listed() {
+        const NAME: &str = "TourBox MIDI In [1]";
+        const OLD: &str =
+            r"\\?\SWD#MMDEVAPI#MIDII_F20B738D.P_0004#{504be32c-ccf6-4d2c-b73f-6f8b3747e22b}";
+        const NEW: &str =
+            r"\\?\SWD#MMDEVAPI#MIDII_0A0B0C0D.P_0004#{504be32c-ccf6-4d2c-b73f-6f8b3747e22b}";
+        let backend = FakeBackend::unavailable();
+        backend.set_openable_port(NAME, OLD);
+        backend.set_listed_ports(&[(NAME, OLD)]);
+        let (tx, _rx) = mpsc::channel(16);
+        let mut input = InputState::new(
+            backend.clone(),
+            "TourBox MIDI In".to_owned(),
+            PortMode::Existing,
+            tx,
+        );
+        input.tick();
+
+        input.tick();
+        backend.set_listed_ports(&[(NAME, NEW)]);
+        backend.set_openable_port(NAME, NEW);
+        input.tick();
+
+        assert_eq!(
+            backend.take_calls(),
+            [
+                open("TourBox MIDI In", PortMode::Existing),
+                Call::List,
+                Call::List,
+                closed(NAME),
+            ],
+            "同じ名前のポートが一覧にあっても、選んだポートの ID が消えたら閉じる必要があります。"
         );
     }
 

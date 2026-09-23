@@ -17,6 +17,9 @@ tourbox = { path = "../tourbox" }
 tracing = "0.1.44"
 tracing-subscriber = { version = "0.3.23", features = ["env-filter"] }
 
+[target.'cfg(windows)'.dependencies]
+midir = { version = "0.11.0", features = ["winrt"] }
+
 [dev-dependencies]
 tempfile = "3.27.0"
 tokio = { version = "1.53.1", features = ["test-util"] }

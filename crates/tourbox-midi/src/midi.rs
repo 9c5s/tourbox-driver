@@ -1,7 +1,10 @@
 //! MIDI ポートの列挙と選択、送受信。
 
 use anyhow::Context;
-use midir::{Ignore, MidiIO, MidiInput, MidiInputConnection, MidiOutput, MidiOutputConnection};
+use midir::{
+    Ignore, MidiIO, MidiInput, MidiInputConnection, MidiInputPort, MidiOutput,
+    MidiOutputConnection, MidiOutputPort,
+};
 use tokio::sync::mpsc::{self, error::TrySendError};
 use tracing::{debug, info, warn};
 
@@ -13,6 +16,8 @@ const CLIENT_NAME: &str = "tourbox-midi";
 const CONTROL_CHANGE: u8 = 0xb0;
 /// データバイトの最大値 (7 ビット)。
 const DATA_MAX: u8 = 0x7f;
+/// Windows の機器 ID で、機器の識別子の直前にある文字列。
+const DEVICE_KEY_PREFIX: &str = "MIDII_";
 
 /// ポートの開き方。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -34,38 +39,56 @@ impl PortMode {
     }
 }
 
+/// 一覧にあるポートの名前と ID。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PortInfo {
+    pub name: String,
+    /// midir が返すポートの ID。Windows では機器 ID (`\\?\SWD#MMDEVAPI#MIDII_...`) である。
+    pub id: String,
+}
+
 /// 開いている MIDI 出力ポート。
 pub struct MidiOut {
     connection: MidiOutputConnection,
     port_name: String,
+    /// None は仮想ポート。
+    port_id: Option<String>,
 }
 
 impl MidiOut {
     /// 出力ポートを開く。
     ///
     /// `Virtual` は `name` で仮想ポートを作成し、`Existing` は `name` に一致する既存のポートへ接続する。
+    /// `Existing` で名前が一致する出力ポートがなければ、名前が一致する入力ポートと機器の識別子
+    /// ([`device_key`]) が同じ出力ポートへ接続する。
     pub fn open(name: &str, mode: PortMode) -> anyhow::Result<Self> {
         let output = MidiOutput::new(CLIENT_NAME).context("MIDI 出力を初期化できませんでした。")?;
-        let (connection, port_name) = match mode {
-            PortMode::Virtual => (create_virtual_output(output, name)?, name.to_owned()),
+        let (connection, port_name, port_id) = match mode {
+            PortMode::Virtual => (create_virtual_output(output, name)?, name.to_owned(), None),
             PortMode::Existing => {
-                let (port, port_name) = choose_existing_port(&output, name, "出力")?;
+                let (port, info) = choose_existing_output(&output, name)?;
                 let connection = output.connect(&port, CLIENT_NAME).with_context(|| {
-                    format!("出力ポート {port_name:?} に接続できませんでした。")
+                    format!("出力ポート {:?} に接続できませんでした。", info.name)
                 })?;
-                (connection, port_name)
+                (connection, info.name, Some(info.id))
             }
         };
-        info!(port = %port_name, ?mode, "MIDI 出力ポートを開きました。");
+        info!(port = %port_name, id = port_id.as_deref().map(display), ?mode, "MIDI 出力ポートを開きました。");
         Ok(Self {
             connection,
             port_name,
+            port_id,
         })
     }
 
     /// 開いているポートの名前を返す。`Existing` では一致した既存のポートの名前である。
     pub fn port_name(&self) -> &str {
         &self.port_name
+    }
+
+    /// 開いているポートの ID を返す。`Existing` で選んだ既存のポートの ID で、仮想ポートは None である。
+    pub fn port_id(&self) -> Option<&str> {
+        self.port_id.as_deref()
     }
 
     /// メッセージを 3 バイトで送る。
@@ -86,43 +109,53 @@ impl MidiOut {
 pub struct MidiIn {
     connection: MidiInputConnection<()>,
     port_name: String,
+    /// None は仮想ポート。
+    port_id: Option<String>,
 }
 
 impl MidiIn {
     /// 入力ポートを開き、受信したバイト列を 1 メッセージずつ `tx` へ渡す。
     ///
-    /// ポートの選び方は [`MidiOut::open`] と同じである。SysEx、タイミング (MIDI クロックと MTC)、
-    /// Active Sensing は受け取らない。`tx` が満杯のときは待たずに捨てる。
+    /// `Virtual` は `name` で仮想ポートを作成し、`Existing` は `name` に名前が一致する既存のポートへ接続する。
+    /// SysEx、タイミング (MIDI クロックと MTC)、Active Sensing は受け取らない。
+    /// `tx` が満杯のときは待たずに捨てる。
     pub fn open(name: &str, mode: PortMode, tx: mpsc::Sender<Vec<u8>>) -> anyhow::Result<Self> {
         let mut input =
             MidiInput::new(CLIENT_NAME).context("MIDI 入力を初期化できませんでした。")?;
         input.ignore(Ignore::All);
         let callback = forward_to(tx);
-        let (connection, port_name) = match mode {
+        let (connection, port_name, port_id) = match mode {
             PortMode::Virtual => (
                 create_virtual_input(input, name, callback)?,
                 name.to_owned(),
+                None,
             ),
             PortMode::Existing => {
-                let (port, port_name) = choose_existing_port(&input, name, "入力")?;
+                let (port, info) = choose_existing_input(&input, name)?;
                 let connection = input
                     .connect(&port, CLIENT_NAME, callback, ())
                     .with_context(|| {
-                        format!("入力ポート {port_name:?} に接続できませんでした。")
+                        format!("入力ポート {:?} に接続できませんでした。", info.name)
                     })?;
-                (connection, port_name)
+                (connection, info.name, Some(info.id))
             }
         };
-        info!(port = %port_name, ?mode, "MIDI 入力ポートを開きました。");
+        info!(port = %port_name, id = port_id.as_deref().map(display), ?mode, "MIDI 入力ポートを開きました。");
         Ok(Self {
             connection,
             port_name,
+            port_id,
         })
     }
 
     /// 開いているポートの名前を返す。`Existing` では一致した既存のポートの名前である。
     pub fn port_name(&self) -> &str {
         &self.port_name
+    }
+
+    /// 開いているポートの ID を返す。`Existing` で選んだ既存のポートの ID で、仮想ポートは None である。
+    pub fn port_id(&self) -> Option<&str> {
+        self.port_id.as_deref()
     }
 
     /// ポートを閉じる。仮想ポートは削除され、以後は受信コールバックが呼ばれない。
@@ -132,16 +165,16 @@ impl MidiIn {
     }
 }
 
-/// 出力ポートの名前を一覧の順に返す。
-pub fn list_output_names() -> anyhow::Result<Vec<String>> {
+/// 出力ポートの名前と ID を一覧の順に返す。
+pub fn list_output_ports() -> anyhow::Result<Vec<PortInfo>> {
     let output = MidiOutput::new(CLIENT_NAME).context("MIDI 出力を初期化できませんでした。")?;
-    port_names(&output)
+    Ok(listed_ports(&output)?.1)
 }
 
-/// 入力ポートの名前を一覧の順に返す。
-pub fn list_input_names() -> anyhow::Result<Vec<String>> {
+/// 入力ポートの名前と ID を一覧の順に返す。
+pub fn list_input_ports() -> anyhow::Result<Vec<PortInfo>> {
     let input = MidiInput::new(CLIENT_NAME).context("MIDI 入力を初期化できませんでした。")?;
-    port_names(&input)
+    Ok(listed_ports(&input)?.1)
 }
 
 /// 設定名に一致するポートの添字を優先順に返す。
@@ -164,6 +197,16 @@ pub fn port_candidates(names: &[String], requested: &str) -> Vec<usize> {
         .collect()
 }
 
+/// Windows の機器 ID から機器の識別子 (`MIDII_` の後から `.` か `#` の前まで) を取り出す。
+///
+/// loopMIDI のポートでは、同じポートの入力と出力で識別子が一致する。
+/// `MIDII_` を含まない ID (macOS の ID など) には識別子がない。
+pub fn device_key(id: &str) -> Option<&str> {
+    let (_, rest) = id.split_once(DEVICE_KEY_PREFIX)?;
+    let key = rest.split(['.', '#']).next()?;
+    (!key.is_empty()).then_some(key)
+}
+
 /// 受信したバイト列が Control Change なら (0 起点のチャンネル、CC 番号、値) を返す。
 ///
 /// ステータスバイトで始まる 3 バイトだけを受け付け、ランニングステータスは扱わない。
@@ -178,41 +221,108 @@ pub fn parse_control_change(bytes: &[u8]) -> Option<(u8, u8, u8)> {
     }
 }
 
-/// ポートの名前を一覧の順に返す。
-fn port_names<T: MidiIO>(io: &T) -> anyhow::Result<Vec<String>> {
-    Ok(named_ports(io)?.into_iter().map(|(_, name)| name).collect())
+/// midir の入力ポートと出力ポートに共通の ID の取得。[`MidiIO`] は ID を扱わないので補う。
+trait PortId {
+    fn port_id(&self) -> String;
 }
 
-/// ポートと名前の組を一覧の順に返す。
-fn named_ports<T: MidiIO>(io: &T) -> anyhow::Result<Vec<(T::Port, String)>> {
-    io.ports()
-        .into_iter()
+impl PortId for MidiInputPort {
+    fn port_id(&self) -> String {
+        self.id()
+    }
+}
+
+impl PortId for MidiOutputPort {
+    fn port_id(&self) -> String {
+        self.id()
+    }
+}
+
+/// ポートと、その名前と ID を一覧の順に返す。2 つの Vec の同じ添字が同じポートを表す。
+fn listed_ports<T>(io: &T) -> anyhow::Result<(Vec<T::Port>, Vec<PortInfo>)>
+where
+    T: MidiIO,
+    T::Port: PortId,
+{
+    let ports = io.ports();
+    let infos = ports
+        .iter()
         .map(|port| {
             let name = io
-                .port_name(&port)
+                .port_name(port)
                 .context("MIDI ポートの名前を取得できませんでした。")?;
-            Ok((port, name))
+            Ok(PortInfo {
+                name,
+                id: port.port_id(),
+            })
         })
-        .collect()
+        .collect::<anyhow::Result<_>>()?;
+    Ok((ports, infos))
 }
 
-/// `requested` に一致する既存のポートを選ぶ。一致が複数あれば候補をログに出して先頭を使う。
+/// `requested` に名前が一致する既存の入力ポートを選ぶ。
+fn choose_existing_input(
+    input: &MidiInput,
+    requested: &str,
+) -> anyhow::Result<(MidiInputPort, PortInfo)> {
+    let (mut ports, mut infos) = listed_ports(input)?;
+    let index = pick_by_name(&infos, requested, "入力")
+        .ok_or_else(|| not_found(&infos, requested, "入力"))?;
+    Ok((ports.swap_remove(index), infos.swap_remove(index)))
+}
+
+/// `requested` に一致する既存の出力ポートを選ぶ。
+///
+/// 名前が一致する出力ポートがなければ [`output_matching_input`] で選ぶ。
+/// WinRT では loopMIDI の出力ポートの名前が「MIDI」になり、名前では選べないためである。
+fn choose_existing_output(
+    output: &MidiOutput,
+    requested: &str,
+) -> anyhow::Result<(MidiOutputPort, PortInfo)> {
+    let (mut ports, mut infos) = listed_ports(output)?;
+    let index = match pick_by_name(&infos, requested, "出力") {
+        Some(index) => index,
+        None => {
+            let inputs = list_input_ports()?;
+            let index = output_matching_input(&infos, &inputs, requested)
+                .ok_or_else(|| not_found(&infos, requested, "出力"))?;
+            info!(
+                id = %infos[index].id,
+                "出力ポート {requested:?} に名前が一致するポートがないため、名前が一致する入力ポートと機器の識別子が同じ出力ポートを選びました。"
+            );
+            index
+        }
+    };
+    Ok((ports.swap_remove(index), infos.swap_remove(index)))
+}
+
+/// 名前が `requested` に一致する入力ポートと、機器の識別子 ([`device_key`]) が同じ出力ポートの添字を返す。
+///
+/// 入力ポートは名前での選択と同じ規則で選ぶ。その入力ポートに識別子がない場合と、
+/// 識別子が同じ出力ポートがない場合、複数あって 1 つに決められない場合は None を返す。
+fn output_matching_input(
+    outputs: &[PortInfo],
+    inputs: &[PortInfo],
+    requested: &str,
+) -> Option<usize> {
+    let input = pick_by_name(inputs, requested, "入力")?;
+    let key = device_key(&inputs[input].id)?;
+    let mut matching = outputs
+        .iter()
+        .enumerate()
+        .filter(|(_, output)| device_key(&output.id) == Some(key))
+        .map(|(index, _)| index);
+    let first = matching.next()?;
+    matching.next().is_none().then_some(first)
+}
+
+/// `requested` に名前が一致するポートの添字を返す。一致が複数あれば候補をログに出して先頭を使う。
 ///
 /// `direction` はメッセージに使う「出力」か「入力」である。
-fn choose_existing_port<T: MidiIO>(
-    io: &T,
-    requested: &str,
-    direction: &str,
-) -> anyhow::Result<(T::Port, String)> {
-    let mut ports = named_ports(io)?;
-    let names: Vec<String> = ports.iter().map(|(_, name)| name.clone()).collect();
+fn pick_by_name(ports: &[PortInfo], requested: &str, direction: &str) -> Option<usize> {
+    let names: Vec<String> = ports.iter().map(|port| port.name.clone()).collect();
     let candidates = port_candidates(&names, requested);
-    let Some(&index) = candidates.first() else {
-        anyhow::bail!(
-            "{direction}ポート {requested:?} が見つかりません。候補: {}",
-            describe_names(names.iter())
-        );
-    };
+    let &index = candidates.first()?;
     if candidates.len() > 1 {
         warn!(
             candidates = %describe_names(candidates.iter().map(|&candidate| &names[candidate])),
@@ -220,7 +330,15 @@ fn choose_existing_port<T: MidiIO>(
             names[index]
         );
     }
-    Ok(ports.swap_remove(index))
+    Some(index)
+}
+
+/// `requested` に一致するポートがないことを、一覧の名前を候補として添えて表す。
+fn not_found(ports: &[PortInfo], requested: &str, direction: &str) -> anyhow::Error {
+    anyhow::anyhow!(
+        "{direction}ポート {requested:?} が見つかりません。候補: {}",
+        describe_names(ports.iter().map(|port| &port.name))
+    )
 }
 
 /// ポート名を表示用に並べる。
@@ -501,6 +619,192 @@ mod tests {
             parse_control_change(&[100, 64, 0]),
             None,
             "ステータスバイトで始まらないバイト列は捨てる必要があります。"
+        );
+    }
+
+    fn infos(ports: &[(&str, &str)]) -> Vec<PortInfo> {
+        ports
+            .iter()
+            .map(|&(name, id)| PortInfo {
+                name: name.to_owned(),
+                id: id.to_owned(),
+            })
+            .collect()
+    }
+
+    /// Windows 10 と loopMIDI 1.0.16 で、WinRT の列挙が返した出力ポート。
+    /// loopMIDI のポートは TourBox MIDI Out (F20B738C) と TourBox MIDI In (F20B738D) である。
+    fn winrt_outputs() -> Vec<PortInfo> {
+        infos(&[
+            (
+                "Microsoft GS Wavetable Synth",
+                r"\\?\SWD#MMDEVAPI#MicrosoftGSWavetableSynth#{6dc23320-ab33-4ce4-80d4-bbb3ebbf2814}",
+            ),
+            (
+                "TouchOSC Bridge",
+                r"\\?\SWD#MMDEVAPI#MIDII_78289FD4.P_0000#{6dc23320-ab33-4ce4-80d4-bbb3ebbf2814}",
+            ),
+            (
+                "3 - AG06/AG03",
+                r"\\?\SWD#MMDEVAPI#MIDII_6D01412D.P_0000#{6dc23320-ab33-4ce4-80d4-bbb3ebbf2814}",
+            ),
+            (
+                "MIDI",
+                r"\\?\SWD#MMDEVAPI#MIDII_F20B738C.P_0000#{6dc23320-ab33-4ce4-80d4-bbb3ebbf2814}",
+            ),
+            (
+                "MIDI",
+                r"\\?\SWD#MMDEVAPI#MIDII_F20B738D.P_0000#{6dc23320-ab33-4ce4-80d4-bbb3ebbf2814}",
+            ),
+        ])
+    }
+
+    /// [`winrt_outputs`] と同じ環境で、WinRT の列挙が返した入力ポート。
+    fn winrt_inputs() -> Vec<PortInfo> {
+        infos(&[
+            (
+                "3 - AG06/AG03",
+                r"\\?\SWD#MMDEVAPI#MIDII_6D01412D.P_0001#{504be32c-ccf6-4d2c-b73f-6f8b3747e22b}",
+            ),
+            (
+                "TouchOSC Bridge",
+                r"\\?\SWD#MMDEVAPI#MIDII_96317EFF.P_0001#{504be32c-ccf6-4d2c-b73f-6f8b3747e22b}",
+            ),
+            (
+                "TourBox MIDI Out [1]",
+                r"\\?\SWD#MMDEVAPI#MIDII_F20B738C.P_0004#{504be32c-ccf6-4d2c-b73f-6f8b3747e22b}",
+            ),
+            (
+                "TourBox MIDI In [1]",
+                r"\\?\SWD#MMDEVAPI#MIDII_F20B738D.P_0004#{504be32c-ccf6-4d2c-b73f-6f8b3747e22b}",
+            ),
+        ])
+    }
+
+    #[test]
+    fn device_key_is_text_between_midii_prefix_and_pin_suffix() {
+        let outputs = winrt_outputs();
+        let inputs = winrt_inputs();
+
+        assert_eq!(
+            device_key(&outputs[3].id),
+            Some("F20B738C"),
+            "出力の機器 ID から MIDII_ の後、.P_ の前までを取り出す必要があります。"
+        );
+        assert_eq!(
+            device_key(&inputs[2].id),
+            Some("F20B738C"),
+            "同じ loopMIDI のポートの入力からは、出力と同じ識別子を取り出す必要があります。"
+        );
+        assert_eq!(
+            device_key(&inputs[0].id),
+            Some("6D01412D"),
+            "ハードウェアの機器 ID からも識別子を取り出す必要があります。"
+        );
+    }
+
+    #[test]
+    fn device_key_is_absent_without_midii_prefix_or_identifier() {
+        for id in [
+            winrt_outputs()[0].id.as_str(),
+            // CoreMIDI の ID は数値である
+            "1234567",
+            r"\\?\SWD#MMDEVAPI#MIDII_.P_0000#{6dc23320-ab33-4ce4-80d4-bbb3ebbf2814}",
+            "",
+        ] {
+            assert_eq!(
+                device_key(id),
+                None,
+                "{id:?} には MIDII_ に続く識別子がないので、識別子なしとする必要があります。"
+            );
+        }
+    }
+
+    #[test]
+    fn output_is_matched_through_input_of_same_loopmidi_port() {
+        let outputs = winrt_outputs();
+        let inputs = winrt_inputs();
+
+        assert_eq!(
+            output_matching_input(&outputs, &inputs, "TourBox MIDI Out"),
+            Some(3),
+            "名前が一致する入力 TourBox MIDI Out [1] と識別子が同じ出力を選ぶ必要があります。"
+        );
+        assert_eq!(
+            output_matching_input(&outputs, &inputs, "TourBox MIDI In"),
+            Some(4),
+            "名前が一致する入力 TourBox MIDI In [1] と識別子が同じ出力を選ぶ必要があります。"
+        );
+    }
+
+    #[test]
+    fn output_matching_requires_input_name_match_and_output_with_same_key() {
+        let outputs = winrt_outputs();
+        let inputs = winrt_inputs();
+
+        assert_eq!(
+            output_matching_input(&outputs, &inputs, "loopMIDI Port"),
+            None,
+            "名前が一致する入力がなければ選ばない必要があります。"
+        );
+        // TouchOSC Bridge は入力と出力で識別子が異なる
+        assert_eq!(
+            output_matching_input(&outputs, &inputs, "TouchOSC"),
+            None,
+            "入力と識別子が同じ出力がなければ選ばない必要があります。"
+        );
+        assert_eq!(
+            output_matching_input(&[], &inputs, "TourBox MIDI Out"),
+            None,
+            "出力が 1 つもなければ選ばない必要があります。"
+        );
+    }
+
+    #[test]
+    fn output_matching_skips_input_without_device_key() {
+        let outputs = infos(&[("MIDI", "1001")]);
+        let inputs = infos(&[("TourBox MIDI Out", "1001")]);
+
+        assert_eq!(
+            output_matching_input(&outputs, &inputs, "TourBox MIDI Out"),
+            None,
+            "識別子のない ID は、文字列が同じでも対応付けない必要があります。"
+        );
+    }
+
+    #[test]
+    fn output_matching_rejects_key_shared_by_several_outputs() {
+        let outputs = infos(&[
+            (
+                "MIDI",
+                r"\\?\SWD#MMDEVAPI#MIDII_0A0B0C0D.P_0000#{6dc23320-ab33-4ce4-80d4-bbb3ebbf2814}",
+            ),
+            (
+                "MIDI",
+                r"\\?\SWD#MMDEVAPI#MIDII_0A0B0C0D.P_0001#{6dc23320-ab33-4ce4-80d4-bbb3ebbf2814}",
+            ),
+        ]);
+        let inputs = infos(&[(
+            "Interface Port 1",
+            r"\\?\SWD#MMDEVAPI#MIDII_0A0B0C0D.P_0004#{504be32c-ccf6-4d2c-b73f-6f8b3747e22b}",
+        )]);
+
+        assert_eq!(
+            output_matching_input(&outputs, &inputs, "Interface Port 1"),
+            None,
+            "識別子が同じ出力が複数あるときは、どれか決められないので選ばない必要があります。"
+        );
+    }
+
+    #[test]
+    fn output_matching_uses_first_input_candidate_like_name_selection() {
+        let outputs = winrt_outputs();
+        let inputs = winrt_inputs();
+
+        assert_eq!(
+            output_matching_input(&outputs, &inputs, "TourBox MIDI"),
+            Some(3),
+            "入力の名前の候補が複数あれば、名前での選択と同じく一覧で最初の入力を使う必要があります。"
         );
     }
 }
