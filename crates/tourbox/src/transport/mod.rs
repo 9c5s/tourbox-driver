@@ -2,6 +2,7 @@
 
 #[cfg(feature = "fake")]
 pub mod fake;
+pub mod usb;
 
 use futures::future::BoxFuture;
 use tokio::sync::mpsc;

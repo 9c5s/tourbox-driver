@@ -11,6 +11,7 @@ use tracing::{debug, info, warn};
 
 use crate::error::TransportError;
 use crate::protocol::{decode, Event, HapticConfig, NotAllowConfigDetector, UNLOCK};
+use crate::transport::usb::UsbTransport;
 use crate::transport::{ConnectionConfig, Incoming, Transport, TransportKind};
 
 /// アンロックの送信完了から、受信の有無にかかわらず Configuring へ進むまでの時間。
@@ -55,10 +56,49 @@ pub trait TransportFactory {
     fn open_ble(&self) -> BoxFuture<'_, Result<Box<dyn Transport>, TransportError>>;
 }
 
+/// 実機の USB と BLE の接続を開く。
+struct HardwareFactory;
+
+impl TransportFactory for HardwareFactory {
+    fn open_usb<'a>(
+        &'a self,
+        usb_port: Option<&'a str>,
+    ) -> BoxFuture<'a, Result<Box<dyn Transport>, TransportError>> {
+        let usb_port = usb_port.map(str::to_owned);
+        Box::pin(async move {
+            let opened =
+                tokio::task::spawn_blocking(move || UsbTransport::open(usb_port.as_deref())).await;
+            let transport =
+                opened.unwrap_or_else(|error| std::panic::resume_unwind(error.into_panic()))?;
+            Ok(Box::new(transport) as Box<dyn Transport>)
+        })
+    }
+
+    fn open_ble(&self) -> BoxFuture<'_, Result<Box<dyn Transport>, TransportError>> {
+        Box::pin(async {
+            Err(TransportError::Ble(
+                "BLE 接続はまだ実装されていません。".to_owned(),
+            ))
+        })
+    }
+}
+
 /// 接続の一生を管理するタスクの起動口。
 pub struct Device;
 
 impl Device {
+    /// 実機の接続を開いて初期化し、イベントを送出するタスクを起動する。
+    ///
+    /// # Panics
+    ///
+    /// tokio のランタイムの外で呼んだ場合。
+    pub fn run(
+        config: ConnectionConfig,
+        haptics: HapticConfig,
+    ) -> (mpsc::Receiver<DeviceEvent>, DeviceHandle) {
+        Self::run_with(config, haptics, HardwareFactory)
+    }
+
     /// `factory` で接続を開いて初期化し、イベントを送出するタスクを起動する。
     ///
     /// # Panics
