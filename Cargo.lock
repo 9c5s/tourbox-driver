@@ -3,5 +3,16 @@
 version = 4
 
 [[package]]
+name = "tourbox"
+version = "0.1.0"
+dependencies = [
+ "tourbox",
+]
+
+[[package]]
+name = "tourbox-midi"
+version = "0.1.0"
+
+[[package]]
 name = "xtask"
 version = "0.1.0"

@@ -1,6 +1,6 @@
 [workspace]
 resolver = "2"
-members = ["xtask"]
+members = ["crates/tourbox", "crates/tourbox-midi", "xtask"]
 
 [workspace.package]
 edition = "2021"
