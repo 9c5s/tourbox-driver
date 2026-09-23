@@ -167,7 +167,7 @@ mod tests {
                 usb_port: None,
             },
             midi: MidiSection {
-                output: "TourBox MIDI".to_owned(),
+                output: "TourBox MIDI Out".to_owned(),
                 input: Some("TourBox MIDI In".to_owned()),
                 channel: 0,
             },

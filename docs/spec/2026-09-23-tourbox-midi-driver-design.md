@@ -166,7 +166,7 @@ loopMIDI を利用者にインストールしてもらい、アプリは既存�
 
 ### 3.2 ワークスペース
 
-Cargo ワークスペースに 2 つのクレートを置く。
+Cargo ワークスペースに 2 つのクレートと、開発用の xtask を置く。
 
 ```
 tourbox-driver/
@@ -191,6 +191,8 @@ tourbox-driver/
     src/haptics.rs           # 受信 MIDI からハプティクス設定への変換
     src/commands/            # run、dump、list-ports
     src/commands/reload.rs   # 設定の再読込の反映手順
+  xtask/                     # 開発用のコマンド (ADR の形式検査。ADR-0012)
+  .cargo/config.toml         # cargo lint-adr のエイリアス
   docs/protocol/haptic-captures.md   # 実機キャプチャ (テストの期待値)
   config.example.toml
   lefthook.yml
@@ -322,7 +324,7 @@ transport = "auto"   # auto | usb | ble
 # usb_port = "COM3"  # auto と usb で使う明示指定。ble では無視
 
 [midi]
-output = "TourBox MIDI"      # macOS は仮想ポートをこの名前で作成、Windows は既存ポート名の部分一致で選択
+output = "TourBox MIDI Out"  # macOS は仮想ポートをこの名前で作成、Windows は既存ポート名の部分一致で選択
 input = "TourBox MIDI In"    # ハプティクス制御の受信用。省略可
 channel = 1                  # 既定チャンネル (1〜16)
 
@@ -372,7 +374,7 @@ top = { note = 70 }
 
 **検証と解決**
 
-- 範囲外の値、未知のキー、存在しないコントロール名、`note` と `cc` の両方指定、`step` の範囲外、`[haptics.control]` 内で同じ (チャンネル、CC 番号) を複数項目に割り当てた場合はエラーにする。
+- 範囲外の値 (`velocity` は 1〜127。0 は Note Off と同じ意味になるため含めない)、未知のキー、存在しないコントロール名、`note` と `cc` の両方指定、`step` の範囲外、修飾ボタン自身をその `[map.with.<ボタン>]` に割り当てた場合、`[haptics.control]` 内で同じ (チャンネル、CC 番号) を複数項目に割り当てた場合はエラーにする。
 - 検証に通った設定は `Config::resolve_mapping()` で **MappingSet** に解決する。`[haptics.control]` は **HapticsControlConfig** として取り出す。MappingSet は「レイヤ (なし + 修飾ボタン) × 操作」ごとの割り当てで、チャンネルは `midi.channel` と項目の `channel` を解決済みの値として持つ。engine は MappingSet だけを受け取り、`midi.channel` を知らない。
 
 ### 5.3 修飾ボタンとメッセージの規則
@@ -455,7 +457,7 @@ engine は出力ポートの状態を知らない。出力が待機中でも run
 - 継続して再試行する回復可能エラーは、デバイス未検出や切断、MIDI ポート未検出や送信失敗、再読込時の設定エラーである。いずれもログに出し、4 章と 6 章で定めた間隔で再試行する。
 - ライブラリ側のエラー型は thiserror でモジュールごとに定義する (transport は I/O、BLE、未検出、使用中)。device はエラー型を持たず、初期化失敗と切断はログと `Disconnected` で表す。protocol はエラー型を持たない。実行ファイル側は anyhow で文脈を付けて集約する。
 - 黙って捨てない。ポート未接続で捨てたイベントは debug ログに、状態の変化 (接続、切断、ポート消失、復帰、再読込) は info または warn ログに必ず出す。
-- ログは tracing で、`RUST_LOG` で制御し、既定は info である。`--verbose` で受信バイトと送信 MIDI をすべて表示する。
+- ログは tracing で標準エラー出力に出し、`RUST_LOG` があればその絞り込みに従う。`RUST_LOG` がなければ、常駐は `info`、`dump` は `tourbox=debug,info` (4.3 節の各状態の受信バイトを含む) を使う。`--verbose` は `RUST_LOG` がないときの絞り込みを `debug` にし、受信バイトと送信 MIDI をすべて表示する。
 
 ## 8. テストと CI
 
