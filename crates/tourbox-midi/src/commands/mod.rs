@@ -37,3 +37,65 @@ fn init_logging(filter: &str) -> anyhow::Result<()> {
         .init();
     Ok(())
 }
+
+/// テストで、出たログを溜めて確かめる補助。
+#[cfg(test)]
+mod captured_logs {
+    use std::io;
+    use std::sync::{Arc, Mutex, PoisonError};
+
+    use tracing::subscriber::DefaultGuard;
+    use tracing::Level;
+
+    /// このスレッドで出た debug 以上のログを、破棄するまで溜める。
+    pub(super) struct CapturedLogs {
+        buffer: Arc<Mutex<Vec<u8>>>,
+        _guard: DefaultGuard,
+    }
+
+    impl CapturedLogs {
+        /// このスレッドのログを溜め始める。
+        pub(super) fn start() -> Self {
+            let buffer = Arc::new(Mutex::new(Vec::new()));
+            let writer = Arc::clone(&buffer);
+            let subscriber = tracing_subscriber::fmt()
+                .with_max_level(Level::DEBUG)
+                .with_ansi(false)
+                .without_time()
+                .with_writer(move || Writer(Arc::clone(&writer)))
+                .finish();
+            Self {
+                buffer,
+                _guard: tracing::subscriber::set_default(subscriber),
+            }
+        }
+
+        /// `level` のログのうち、メッセージに `fragment` を含むものがあるか。
+        pub(super) fn contains(&self, level: Level, fragment: &str) -> bool {
+            let buffer = self.buffer.lock().unwrap_or_else(PoisonError::into_inner);
+            String::from_utf8_lossy(&buffer)
+                .lines()
+                // 行の先頭は右寄せしたレベル名
+                .any(|line| {
+                    line.trim_start().starts_with(level.as_str()) && line.contains(fragment)
+                })
+        }
+    }
+
+    /// 溜め先へ書き込む。
+    struct Writer(Arc<Mutex<Vec<u8>>>);
+
+    impl io::Write for Writer {
+        fn write(&mut self, bytes: &[u8]) -> io::Result<usize> {
+            self.0
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner)
+                .extend_from_slice(bytes);
+            Ok(bytes.len())
+        }
+
+        fn flush(&mut self) -> io::Result<()> {
+            Ok(())
+        }
+    }
+}

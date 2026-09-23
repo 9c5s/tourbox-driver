@@ -15,7 +15,7 @@ use tourbox::protocol::{Event, HapticConfig};
 use tourbox::transport::ConnectionConfig;
 use tracing::{debug, info};
 
-use super::reload::{reload, ReloadTarget};
+use super::reload::{reload, warn_if_haptics_control_is_disabled, ReloadTarget};
 use crate::config::{default_config_path, watch, Config, HapticsControlConfig, MappingSet};
 use crate::engine::Engine;
 use crate::haptics::HapticsController;
@@ -224,6 +224,13 @@ impl<B: OutputBackend, I: InputBackend + Clone, D: DeviceLink> ReloadTarget for 
     async fn restart_device(&mut self, connection: ConnectionConfig, haptics: HapticConfig) {
         info!("[device] が変わったため、TourBox との接続をやり直します。");
         self.device.stop().await;
+        let mut discarded = 0;
+        while self.events.try_recv().is_ok() {
+            discarded += 1;
+        }
+        if discarded > 0 {
+            debug!("古い接続で受信していたイベント {discarded} 件を破棄しました。");
+        }
         self.events = self.device.start(connection, haptics);
     }
 }
@@ -236,6 +243,7 @@ fn prepare_input<I: InputBackend + Clone>(
     mode: PortMode,
     config: &Config,
 ) -> HapticsInput<I> {
+    warn_if_haptics_control_is_disabled(config);
     let (tx, received) = mpsc::channel(INPUT_CAPACITY);
     let mut input = HapticsInput {
         backend,
@@ -386,7 +394,9 @@ mod tests {
     use tokio::time::sleep;
     use tourbox::protocol::{Axis, Button, Modifier, Strength};
     use tourbox::transport::TransportKind;
+    use tracing::Level;
 
+    use super::super::captured_logs::CapturedLogs;
     use super::*;
     use crate::input::fake as input_fake;
     use crate::midi_msg::MidiMessage;
@@ -971,8 +981,34 @@ mod tests {
         );
     }
 
+    #[test]
+    fn haptics_control_without_midi_input_is_warned_at_start() {
+        for (case, config, warned) in [
+            ("制御があり入力がない", parse(&text_with_input(None)), true),
+            ("制御も入力もある", config_with_input(), false),
+            ("制御も入力もない", config(), false),
+        ] {
+            let logs = CapturedLogs::start();
+
+            start(
+                &config,
+                &FakeBackend::openable(PORT),
+                &input_fake::FakeBackend::unavailable(),
+                &FakeDevice::default(),
+            );
+
+            let expected = if warned { "出す" } else { "出さない" };
+            assert_eq!(
+                logs.contains(Level::WARN, "MIDI 入力によるハプティクス制御は無効です。"),
+                warned,
+                "{case}設定では、起動時に警告を{expected}必要があります。"
+            );
+        }
+    }
+
     #[tokio::test(start_paused = true)]
     async fn reload_notification_applies_new_config_to_running_components() {
+        let logs = CapturedLogs::start();
         let dir = tempfile::tempdir().expect("一時ディレクトリを作れる必要があります。");
         let path = dir.path().join("config.toml");
         let backend = FakeBackend::openable(PORT);
@@ -1002,7 +1038,10 @@ mod tests {
                 .send(())
                 .await
                 .expect("serve が通知を受け取れる必要があります。");
-            sleep(STOP_DELAY + MOMENT).await;
+            // 古い接続を止めている間に、その接続で届いたイベント
+            sleep(MOMENT).await;
+            emit(&old_events, press(Button::Side)).await;
+            sleep(STOP_DELAY).await;
             emit(&device.events(), press(Button::Top)).await;
             sleep(MOMENT).await;
             stop_tx
@@ -1020,7 +1059,7 @@ mod tests {
                 sent(note_off(50)),
                 closed(),
                 Call::Open(NEW_PORT.to_owned(), PortMode::Existing),
-                // Side の修飾は解除され、新しい割り当ての CC 21 になる
+                // Side の修飾は解除され、停止中に届いた Side の押下も捨てるので、新しい割り当ての CC 21 になる
                 new_port(cc(21, 127)),
                 new_port(cc(21, 0)),
                 Call::Close(NEW_PORT.to_owned()),
@@ -1049,6 +1088,13 @@ mod tests {
         assert!(
             old_events.is_closed(),
             "接続をやり直した後は、古い接続のイベントを受け取らない必要があります。"
+        );
+        assert!(
+            logs.contains(
+                Level::DEBUG,
+                "古い接続で受信していたイベント 1 件を破棄しました。"
+            ),
+            "古い接続で受信していたイベントを捨てたときは、件数を debug ログに出す必要があります。"
         );
     }
 

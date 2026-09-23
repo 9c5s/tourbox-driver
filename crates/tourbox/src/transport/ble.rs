@@ -278,9 +278,9 @@ async fn open(adapter: &Adapter, peripheral: &Peripheral) -> Result<BleTransport
     .await?;
     let characteristics = peripheral.characteristics();
     let notify = find_characteristic(&characteristics, NOTIFY_UUID)
-        .ok_or_else(|| missing_characteristic("通知用 (fff1)"))?;
+        .ok_or_else(|| missing_characteristic("通知用", "fff1"))?;
     let write = find_characteristic(&characteristics, WRITE_UUID)
-        .ok_or_else(|| missing_characteristic("書き込み用 (fff2)"))?;
+        .ok_or_else(|| missing_characteristic("書き込み用", "fff2"))?;
     let notifications = within(
         OPERATION_TIMEOUT,
         "通知の受け取りの準備",
@@ -308,10 +308,10 @@ async fn open(adapter: &Adapter, peripheral: &Peripheral) -> Result<BleTransport
     })
 }
 
-/// キャラクタリスティックが見つからないエラーを作る。
-fn missing_characteristic(role: &str) -> TransportError {
+/// キャラクタリスティックが見つからないエラーを作る。`uuid` は 16 ビットの短縮形。
+fn missing_characteristic(role: &str, uuid: &str) -> TransportError {
     TransportError::Ble(format!(
-        "サービス fff0 に{role}のキャラクタリスティックが見つかりません。"
+        "サービス fff0 に{role}のキャラクタリスティック {uuid} が見つかりません。"
     ))
 }
 

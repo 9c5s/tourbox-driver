@@ -65,7 +65,17 @@ pub(super) async fn reload(
             .await;
     }
     info!(changed = %changed, "設定ファイルを再読込して反映しました。");
+    warn_if_haptics_control_is_disabled(&new);
     *current = new;
+}
+
+/// `[haptics.control]` があって `midi.input` がなければ、ハプティクス制御が無効であることを警告する。
+pub(super) fn warn_if_haptics_control_is_disabled(config: &Config) {
+    if config.midi.input.is_none() && config.haptics.control != HapticsControlConfig::default() {
+        warn!(
+            "[haptics.control] が設定されていますが、midi.input がないため、MIDI 入力によるハプティクス制御は無効です。"
+        );
+    }
 }
 
 #[cfg(test)]
@@ -74,7 +84,9 @@ mod tests {
     use std::path::PathBuf;
 
     use tempfile::TempDir;
+    use tracing::Level;
 
+    use super::super::captured_logs::CapturedLogs;
     use super::*;
 
     /// 反映先に対して行われた操作。
@@ -268,6 +280,36 @@ tall = { note = 61 }
             assert_eq!(
                 steps, expected,
                 "{mode:?} で入力ポートの名前が {current:?} から {new:?} になる再読込では、入力ポートを {reopened:?} で開き直す (None は開き直さない) 必要があります。"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn haptics_control_without_midi_input_is_warned_on_every_reload() {
+        let control = "[haptics.control]\nknob = { cc = 100 }\n";
+        for (case, file, warned) in [
+            (
+                "制御があり入力がない",
+                format!("{}{control}", with_input(None)),
+                true,
+            ),
+            (
+                "制御も入力もある",
+                format!("{}{control}", with_input(Some("A"))),
+                false,
+            ),
+            ("制御も入力もない", with_input(None), false),
+        ] {
+            let logs = CapturedLogs::start();
+
+            // 差分のない再読込でも、そのたびに警告する
+            reloaded(&file, Some(&file), PortMode::Existing).await;
+
+            let expected = if warned { "出す" } else { "出さない" };
+            assert_eq!(
+                logs.contains(Level::WARN, "MIDI 入力によるハプティクス制御は無効です。"),
+                warned,
+                "{case}設定を再読込したときは、警告を{expected}必要があります。"
             );
         }
     }

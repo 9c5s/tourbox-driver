@@ -143,7 +143,7 @@ fn device_section(field: Option<Field>) -> Checked<ConnectionConfig> {
         transport: table
             .optional("transport", |field| field.choice(&TRANSPORTS))?
             .unwrap_or(TransportKind::Auto),
-        usb_port: table.optional("usb_port", |field| field.string())?,
+        usb_port: table.optional("usb_port", |field| field.non_empty_string())?,
     })
 }
 
@@ -151,8 +151,8 @@ fn midi_section(field: &Field) -> Checked<MidiSection> {
     let table = field.table()?;
     table.expect_keys(&["output", "input", "channel"])?;
     Ok(MidiSection {
-        output: table.required("output")?.string()?,
-        input: table.optional("input", |field| field.string())?,
+        output: table.required("output")?.non_empty_string()?,
+        input: table.optional("input", |field| field.non_empty_string())?,
         channel: channel(&table.required("channel")?)?,
     })
 }
@@ -320,7 +320,7 @@ fn map_layer<'a, 'i: 'a>(
         } else {
             return Err(invalid_key(
                 key,
-                format!("`{name}` は存在しないコントロール名です。"),
+                format!("`{}` は存在しないコントロール名です。", field.path),
             ));
         }
     }
@@ -592,6 +592,14 @@ impl<'a, 'i> Field<'a, 'i> {
             DeValue::String(value) => Ok(value.to_string()),
             _ => Err(self.invalid(format!("`{}` には文字列を指定してください。", self.path))),
         }
+    }
+
+    fn non_empty_string(&self) -> Checked<String> {
+        let value = self.string()?;
+        if value.is_empty() {
+            return Err(self.invalid(format!("`{}` に空の文字列は指定できません。", self.path)));
+        }
+        Ok(value)
     }
 
     fn boolean(&self) -> Checked<bool> {
@@ -1024,8 +1032,8 @@ mod tests {
     #[test]
     fn unknown_control_names_are_reported_with_line() {
         assert_rejected_at(&[
-            ("[map] のキー", "shift = { note = 60 }", 5, "`shift` は存在しないコントロール名です。"),
-            ("レイヤのキー", "[map.with.side]\nshift = { note = 60 }", 6, "`shift` は存在しないコントロール名です。"),
+            ("[map] のキー", "shift = { note = 60 }", 5, "`map.shift` は存在しないコントロール名です。"),
+            ("レイヤのキー", "[map.with.side]\nshift = { note = 60 }", 6, "`map.with.side.shift` は存在しないコントロール名です。"),
             ("[map.with] の名前", "[map.with.shift]\ntall = { note = 60 }", 5, "`shift` は存在しないボタン名です。"),
             ("[haptics] の軸名", "[haptics]\nwheel = { strength = \"weak\" }", 6, "`haptics.wheel` は指定できないキーです。指定できるのは knob、scroll、dial、with、control です。"),
             ("[haptics] のボタン名", "[haptics]\ntall = { strength = \"weak\" }", 6, "`haptics.tall` は指定できないキー"),
@@ -1139,6 +1147,36 @@ mod tests {
             ("同じ項目の cc と speed_cc", "[haptics.control]\nknob = { cc = 100, speed_cc = 100 }", 6, "`haptics.control.knob.speed_cc` の CC 100 は `haptics.control.knob.cc` と重複しています。"),
             ("軸と修飾の個別制御", "[haptics.control]\nknob = { cc = 100 }\n[haptics.control.with.side]\nknob = { cc = 100 }", 8, "`haptics.control.with.side.knob.cc` の CC 100 は `haptics.control.knob.cc` と重複しています。"),
         ]);
+    }
+
+    #[test]
+    fn empty_port_names_are_rejected_with_line() {
+        for (case, text, line, expected) in [
+            (
+                "midi.output",
+                "[midi]\noutput = \"\"\nchannel = 1\n[map]\n",
+                2,
+                "`midi.output` に空の文字列は指定できません。",
+            ),
+            (
+                "midi.input",
+                "[midi]\noutput = \"TourBox MIDI\"\ninput = \"\"\nchannel = 1\n[map]\n",
+                3,
+                "`midi.input` に空の文字列は指定できません。",
+            ),
+        ] {
+            assert_eq!(
+                rejected(text),
+                (Some(line), expected.to_owned()),
+                "空の {case} は、部分一致がすべてのポートに成立するので、行番号付きで拒否する必要があります。"
+            );
+        }
+        assert_rejected_at(&[(
+            "device.usb_port",
+            "[device]\nusb_port = \"\"",
+            6,
+            "`device.usb_port` に空の文字列は指定できません。",
+        )]);
     }
 
     #[test]
