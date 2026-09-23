@@ -20,10 +20,15 @@ pub enum Incoming {
 /// デバイスとの 1 本の接続。USB か BLE かは実行時に決まるので `Box<dyn Transport>` として扱う。
 ///
 /// 受信したかたまりと切断の通知は、`take_receiver` で取り出す 1 本のチャネルに起きた順で届く。
+/// 実装は `close` 以外で接続が終わった場合に必ず `Incoming::Disconnected` を送る。
+/// 受け取る側は、`Disconnected` なしでチャネルが閉じた場合も切断として扱う (ADR-0017)。
 pub trait Transport: Send {
     /// `data` を送り、送信が完了するまで待つ。
     ///
     /// 切断した後や `close` の後に呼ぶと `TransportError` を返す。
+    ///
+    /// 返す future は途中で破棄してよい。破棄した送信が行われたかどうかは不定で、
+    /// 破棄の後も `close` は正常に動く (ADR-0017)。
     fn send<'a>(&'a mut self, data: &'a [u8]) -> BoxFuture<'a, Result<(), TransportError>>;
 
     /// 受信チャネルを取り出す。接続ごとに 1 回だけ取り出せ、2 回目以降は `None` を返す。
@@ -31,7 +36,8 @@ pub trait Transport: Send {
 
     /// 接続を閉じ、読み取りスレッドや接続の終了を待ってから戻る。
     ///
-    /// 切断の後にも呼べる。戻った後は受信チャネルに何も送出しない。
+    /// 切断の後にも呼べる。`close` による終了では `Incoming::Disconnected` を送らず、
+    /// 戻った後は受信チャネルに何も送出しない。
     fn close(&mut self) -> BoxFuture<'_, Result<(), TransportError>>;
 }
 
