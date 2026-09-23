@@ -4,6 +4,8 @@ pub mod cli;
 pub mod commands;
 pub mod config;
 pub mod engine;
+pub mod haptics;
+pub mod input;
 pub mod midi;
 pub mod midi_msg;
 pub mod output;
