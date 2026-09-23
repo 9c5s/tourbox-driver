@@ -3,7 +3,7 @@
 use std::io::{self, Read, Write};
 use std::panic;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex, PoisonError};
 use std::thread;
 use std::time::Duration;
 
@@ -31,10 +31,16 @@ const CHANNEL_CAPACITY: usize = 256;
 /// 受信チャネルが満杯のときに、空きと停止要求を確認し直す間隔。
 const FULL_RETRY_INTERVAL: Duration = Duration::from_millis(10);
 
+/// 書き込みに使うポート。書き込みのたびに別スレッドへ渡す。
+type SharedPort = Arc<Mutex<Box<dyn SerialPort>>>;
+
 /// TourBox との USB の接続。
+///
+/// 開いたポートを書き込みに使い、読み取りスレッドにはその複製を渡す。
+/// 複製を閉じるとポートの排他 (TIOCEXCL) が解除されるので、排他を保つため複製は接続ごとに 1 つにする。
 pub struct UsbTransport {
-    /// 送信に使うポート。`close` の後は `None`。
-    port: Option<Box<dyn SerialPort>>,
+    /// 書き込みに使うポート。`close` の後は `None`。
+    port: Option<SharedPort>,
     receiver: Option<mpsc::Receiver<Incoming>>,
     /// 立てると、読み取りスレッドが次の読み取りの前に終わる。
     stop: Arc<AtomicBool>,
@@ -73,7 +79,7 @@ impl UsbTransport {
                 move || read_loop(reader_port, &sender, &stop)
             })?;
         Ok(Self {
-            port: Some(port),
+            port: Some(Arc::new(Mutex::new(port))),
             receiver: Some(receiver),
             stop,
             reader: Some(reader),
@@ -81,14 +87,14 @@ impl UsbTransport {
         })
     }
 
-    /// 送信に使うポートの複製を返す。閉じた後や切断の後はエラーを返す。
-    fn writable_port(&self) -> Result<Box<dyn SerialPort>, TransportError> {
+    /// 書き込みに使うポートを返す。閉じた後や切断の後はエラーを返す。
+    fn writable_port(&self) -> Result<SharedPort, TransportError> {
         let reading = self
             .reader
             .as_ref()
             .is_some_and(|reader| !reader.is_finished());
         match &self.port {
-            Some(port) if reading => Ok(port.try_clone().map_err(io::Error::from)?),
+            Some(port) if reading => Ok(Arc::clone(port)),
             _ => Err(io::Error::new(
                 io::ErrorKind::NotConnected,
                 "ポートは閉じているか、切断されています。",
@@ -113,9 +119,10 @@ impl Transport for UsbTransport {
         Box::pin(async move {
             // 破棄された送信の書き込みが残っていれば、バイト列が混ざらないように終わるまで待つ。その成否は問わない
             let _ = self.finish_writing().await;
-            let mut port = self.writable_port()?;
+            let port = self.writable_port()?;
             let data = data.to_vec();
             self.writing = Some(tokio::task::spawn_blocking(move || {
+                let mut port = port.lock().unwrap_or_else(PoisonError::into_inner);
                 port.write_all(&data)?;
                 port.flush()
             }));
@@ -256,6 +263,7 @@ fn classify_read(result: &io::Result<usize>) -> ReadStep {
 ///
 /// serialport は、Windows のアクセス拒否と、macOS の排他 (TIOCEXCL の EBUSY と flock の競合) を
 /// `NoDevice` にするので、これを他のプロセスによる使用中とみなす。
+/// Windows ではファイルとパスが見つからないエラーも `NoDevice` になるので、列挙の直後に抜かれたポートは 1 回分の再試行の間 `Busy` になる。
 fn open_error(error: serialport::Error) -> TransportError {
     match error.kind() {
         serialport::ErrorKind::NoDevice => TransportError::Busy,
