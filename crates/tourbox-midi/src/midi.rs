@@ -1,5 +1,8 @@
 //! MIDI ポートの列挙と選択、送受信。
 
+use std::any::Any;
+use std::panic::{self, AssertUnwindSafe};
+
 use anyhow::Context;
 use midir::{
     Ignore, MidiIO, MidiInput, MidiInputConnection, MidiInputPort, MidiOutput,
@@ -239,25 +242,52 @@ impl PortId for MidiOutputPort {
 }
 
 /// ポートと、その名前と ID を一覧の順に返す。2 つの Vec の同じ添字が同じポートを表す。
+///
+/// 列挙中のパニックはエラーとして返す ([`recover_from_panic`])。
 fn listed_ports<T>(io: &T) -> anyhow::Result<(Vec<T::Port>, Vec<PortInfo>)>
 where
     T: MidiIO,
     T::Port: PortId,
 {
-    let ports = io.ports();
-    let infos = ports
-        .iter()
-        .map(|port| {
-            let name = io
-                .port_name(port)
-                .context("MIDI ポートの名前を取得できませんでした。")?;
-            Ok(PortInfo {
-                name,
-                id: port.port_id(),
+    recover_from_panic(|| {
+        let ports = io.ports();
+        let infos = ports
+            .iter()
+            .map(|port| {
+                let name = io
+                    .port_name(port)
+                    .context("MIDI ポートの名前を取得できませんでした。")?;
+                Ok(PortInfo {
+                    name,
+                    id: port.port_id(),
+                })
             })
-        })
-        .collect::<anyhow::Result<_>>()?;
-    Ok((ports, infos))
+            .collect::<anyhow::Result<_>>()?;
+        Ok((ports, infos))
+    })
+}
+
+/// 列挙の処理 `enumerate` を呼び、パニックしたらその内容を添えたエラーに変える。
+///
+/// midir の WinRT 実装は、列挙の失敗でエラーを返さずにパニックする。
+fn recover_from_panic<R>(enumerate: impl FnOnce() -> anyhow::Result<R>) -> anyhow::Result<R> {
+    panic::catch_unwind(AssertUnwindSafe(enumerate)).unwrap_or_else(|payload| {
+        Err(anyhow::anyhow!(
+            "MIDI ポートの一覧の取得中にパニックが発生しました: {}",
+            panic_message(payload.as_ref())
+        ))
+    })
+}
+
+/// パニックの内容を返す。`panic!` と `expect` の内容は `&str` か `String` である。
+fn panic_message(payload: &(dyn Any + Send)) -> &str {
+    if let Some(message) = payload.downcast_ref::<&str>() {
+        message
+    } else if let Some(message) = payload.downcast_ref::<String>() {
+        message
+    } else {
+        "(内容を取得できません)"
+    }
 }
 
 /// `requested` に名前が一致する既存の入力ポートを選ぶ。
@@ -271,29 +301,37 @@ fn choose_existing_input(
     Ok((ports.swap_remove(index), infos.swap_remove(index)))
 }
 
-/// `requested` に一致する既存の出力ポートを選ぶ。
-///
-/// 名前が一致する出力ポートがなければ [`output_matching_input`] で選ぶ。
-/// WinRT では loopMIDI の出力ポートの名前が「MIDI」になり、名前では選べないためである。
+/// `requested` に一致する既存の出力ポートを [`pick_output`] で選ぶ。
 fn choose_existing_output(
     output: &MidiOutput,
     requested: &str,
 ) -> anyhow::Result<(MidiOutputPort, PortInfo)> {
     let (mut ports, mut infos) = listed_ports(output)?;
-    let index = match pick_by_name(&infos, requested, "出力") {
-        Some(index) => index,
-        None => {
-            let inputs = list_input_ports()?;
-            let index = output_matching_input(&infos, &inputs, requested)
-                .ok_or_else(|| not_found(&infos, requested, "出力"))?;
-            info!(
-                id = %infos[index].id,
-                "出力ポート {requested:?} に名前が一致するポートがないため、名前が一致する入力ポートと機器の識別子が同じ出力ポートを選びました。"
-            );
-            index
-        }
-    };
+    let index = pick_output(&infos, requested, list_input_ports)?;
     Ok((ports.swap_remove(index), infos.swap_remove(index)))
+}
+
+/// `requested` に一致する出力ポートの添字を返す。
+///
+/// 名前が一致する出力ポートがなければ、`list_inputs` で入力ポートの一覧を取得し、
+/// [`output_matching_input`] で選ぶ。WinRT では loopMIDI の出力ポートの名前が「MIDI」になり、
+/// 名前では選べないためである。
+fn pick_output(
+    outputs: &[PortInfo],
+    requested: &str,
+    list_inputs: impl FnOnce() -> anyhow::Result<Vec<PortInfo>>,
+) -> anyhow::Result<usize> {
+    if let Some(index) = pick_by_name(outputs, requested, "出力") {
+        return Ok(index);
+    }
+    let inputs = list_inputs()?;
+    let index = output_matching_input(outputs, &inputs, requested)
+        .ok_or_else(|| not_found(outputs, requested, "出力"))?;
+    info!(
+        id = %outputs[index].id,
+        "出力ポート {requested:?} に名前が一致するポートがないため、名前が一致する入力ポートと機器の識別子が同じ出力ポートを選びました。"
+    );
+    Ok(index)
 }
 
 /// 名前が `requested` に一致する入力ポートと、機器の識別子 ([`device_key`]) が同じ出力ポートの添字を返す。
@@ -415,6 +453,8 @@ fn forward_to(tx: mpsc::Sender<Vec<u8>>) -> impl FnMut(u64, &[u8], &mut ()) + Se
 
 #[cfg(test)]
 mod tests {
+    use std::cell::Cell;
+
     use tokio::sync::mpsc::error::TryRecvError;
 
     use super::*;
@@ -805,6 +845,79 @@ mod tests {
             output_matching_input(&outputs, &inputs, "TourBox MIDI"),
             Some(3),
             "入力の名前の候補が複数あれば、名前での選択と同じく一覧で最初の入力を使う必要があります。"
+        );
+    }
+
+    #[test]
+    fn output_found_by_name_is_chosen_without_listing_inputs() {
+        let listed_inputs = Cell::new(false);
+
+        let index = pick_output(&winrt_outputs(), "AG06", || {
+            listed_inputs.set(true);
+            Ok(winrt_inputs())
+        });
+
+        assert_eq!(
+            index.ok(),
+            Some(2),
+            "名前が一致する出力ポートを選ぶ必要があります。"
+        );
+        assert!(
+            !listed_inputs.get(),
+            "名前で見つかったときは、入力ポートの一覧を取得しない必要があります。"
+        );
+    }
+
+    #[test]
+    fn output_not_found_by_name_is_chosen_through_input_of_same_device() {
+        assert_eq!(
+            pick_output(&winrt_outputs(), "TourBox MIDI Out", || Ok(winrt_inputs())).ok(),
+            Some(3),
+            "名前で見つからなければ、名前が一致する入力と識別子が同じ出力を選ぶ必要があります。"
+        );
+    }
+
+    #[test]
+    fn output_found_neither_by_name_nor_device_is_reported_with_candidates() {
+        let error = pick_output(&winrt_outputs(), "Missing Port", || Ok(winrt_inputs()))
+            .expect_err("どの方法でも見つからなければエラーにする必要があります。");
+
+        assert!(
+            error
+                .to_string()
+                .starts_with("出力ポート \"Missing Port\" が見つかりません。候補: "),
+            "エラーには設定名と候補を示す必要があります: {error:#}"
+        );
+    }
+
+    #[test]
+    fn panic_during_enumeration_becomes_error() {
+        // midir の WinRT 実装は列挙の失敗を expect で処理し、expect は String の内容でパニックする
+        let from_expect: anyhow::Result<Vec<PortInfo>> =
+            recover_from_panic(|| panic!("FindAllAsyncAqsFilter failed: {:?}", "E_FAIL"));
+        let from_literal: anyhow::Result<Vec<PortInfo>> =
+            recover_from_panic(|| panic!("固定の文言"));
+
+        let error = from_expect.expect_err("列挙中のパニックはエラーとして返す必要があります。");
+        assert!(
+            error.to_string().contains("FindAllAsyncAqsFilter failed"),
+            "エラーにはパニックの内容を含める必要があります: {error:#}"
+        );
+        let error = from_literal.expect_err("列挙中のパニックはエラーとして返す必要があります。");
+        assert!(
+            error.to_string().contains("固定の文言"),
+            "文字列リテラルのパニックでも内容を含める必要があります: {error:#}"
+        );
+    }
+
+    #[test]
+    fn enumeration_without_panic_returns_its_result() {
+        let ports = infos(&[("MIDI", "1001")]);
+
+        assert_eq!(
+            recover_from_panic(|| Ok(ports.clone())).ok(),
+            Some(ports),
+            "パニックしなければ、列挙の結果をそのまま返す必要があります。"
         );
     }
 }
