@@ -6,6 +6,7 @@ pub mod config;
 pub mod engine;
 pub mod midi;
 pub mod midi_msg;
+pub mod output;
 
 use std::process::ExitCode;
 

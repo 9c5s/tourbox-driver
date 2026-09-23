@@ -13,7 +13,10 @@ pub struct Cli {
     #[arg(long, value_name = "PATH", help = "設定ファイルのパスを指定します。")]
     pub config: Option<PathBuf>,
 
-    #[arg(long, help = "受信したバイト列などの詳細なログを表示します。")]
+    #[arg(
+        long,
+        help = "受信したバイト列や送信した MIDI メッセージなどの詳細なログを表示します。"
+    )]
     pub verbose: bool,
 
     #[command(subcommand)]
