@@ -24,6 +24,11 @@ pub struct Cli {
 pub enum Command {
     #[command(about = "TourBox に接続し、受け取ったイベントを表示します。MIDI は送りません。")]
     Dump(DumpArgs),
+
+    #[command(
+        about = "MIDI の入出力ポートを一覧表示します。設定ファイルに書く名前の確認に使います。"
+    )]
+    ListPorts,
 }
 
 #[derive(Debug, Args)]
@@ -175,6 +180,16 @@ mod tests {
         assert!(
             matches!(cli.command, Some(Command::Dump(_))),
             "トップレベルの引数の後にサブコマンドを受け付ける必要があります。"
+        );
+    }
+
+    #[test]
+    fn list_ports_is_parsed_as_subcommand() {
+        let cli = parse(&["tourbox-midi", "list-ports"]);
+
+        assert!(
+            matches!(cli.command, Some(Command::ListPorts)),
+            "list-ports をサブコマンドとして受け付ける必要があります。"
         );
     }
 
