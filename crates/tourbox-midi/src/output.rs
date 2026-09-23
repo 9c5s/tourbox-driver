@@ -133,13 +133,15 @@ impl<B: OutputBackend> OutputState<B> {
         }
     }
 
-    /// 台帳の Off を今のポートへ送って台帳を空にし、ポートを閉じる。次の tick で `name` を開く。
+    /// 台帳の Off を今のポートへ送って台帳を空にし、ポートを閉じて、すぐに `name` を開く。
+    /// 開けなければ次の [`OutputState::tick`] で再試行する。
     pub fn reopen(&mut self, name: String) {
         info!(from = %self.name, to = %name, "MIDI 出力ポートを開き直します。");
         self.send_ledger_offs();
         self.ledger.clear();
         self.disconnect();
         self.name = name;
+        self.connect();
     }
 
     /// `offs` と台帳に残った Off を送り、ポートを閉じる。
@@ -690,7 +692,6 @@ mod tests {
         backend.set_openable(Some("New Port"));
 
         output.reopen("New Port".to_owned());
-        output.tick();
         output.shutdown(Vec::new());
 
         assert_eq!(
@@ -705,7 +706,7 @@ mod tests {
                 open("New Port", PortMode::Existing),
                 closed("New Port"),
             ],
-            "開き直す前に台帳の Off を古いポートへ送り、台帳を空にしてから新しい名前で開く必要があります。"
+            "開き直す前に台帳の Off を古いポートへ送り、台帳を空にしてから、次の tick を待たずに新しい名前で開く必要があります。"
         );
     }
 
@@ -716,12 +717,11 @@ mod tests {
             OutputState::new(backend.clone(), "Old Port".to_owned(), PortMode::Existing);
         output.tick();
         output.send(button_on(note_on(60)));
+        backend.set_openable(Some("New Port"));
         backend.set_send_fails(true);
 
         output.reopen("New Port".to_owned());
         backend.set_send_fails(false);
-        backend.set_openable(Some("New Port"));
-        output.tick();
         output.shutdown(Vec::new());
 
         assert_eq!(
@@ -735,6 +735,27 @@ mod tests {
                 closed("New Port"),
             ],
             "古いポートへの Off が失敗しても台帳を空にし、新しいポートへは送らない必要があります。"
+        );
+    }
+
+    #[test]
+    fn reopen_retries_on_next_tick_when_new_port_cannot_be_opened() {
+        let backend = FakeBackend::openable(PORT);
+        let mut output = connected(&backend);
+
+        backend.set_openable(None);
+        output.reopen("New Port".to_owned());
+        backend.set_openable(Some("New Port"));
+        output.tick();
+
+        assert_eq!(
+            backend.take_calls(),
+            [
+                closed(PORT),
+                open("New Port", PortMode::Existing),
+                open("New Port", PortMode::Existing),
+            ],
+            "reopen で開けなかったときは未接続になり、次の tick で新しい名前を開き直す必要があります。"
         );
     }
 

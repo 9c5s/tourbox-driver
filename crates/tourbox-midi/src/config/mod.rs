@@ -1,8 +1,10 @@
 //! 設定ファイルの読込、検証、解決。
 
+mod diff;
 mod resolve;
 mod schema;
 mod validate;
+mod watch;
 
 use std::ffi::OsString;
 use std::path::{Path, PathBuf};
@@ -11,12 +13,14 @@ use std::{env, fs, io};
 use tourbox::protocol::HapticConfig;
 use tourbox::transport::ConnectionConfig;
 
+pub use diff::{diff, ChangedSections, Section};
 pub use resolve::{ButtonAssignment, MappingSet, RotationAssignment};
 pub use schema::{
     ButtonEntry, ButtonKind, Config, ControlCc, HapticOverride, HapticSetting,
     HapticsControlConfig, HapticsSection, MapLayer, MapSection, MidiSection, RelativeEncoding,
     RotationEntry, RotationMode,
 };
+pub use watch::{watch, ConfigWatcher};
 
 /// 設定ファイルのエラー。
 #[derive(Debug, thiserror::Error)]

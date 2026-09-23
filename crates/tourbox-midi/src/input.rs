@@ -30,6 +30,7 @@ pub trait InputPort {
 }
 
 /// midir の入力ポート。
+#[derive(Clone)]
 pub struct MidiInBackend;
 
 impl InputBackend for MidiInBackend {
@@ -110,10 +111,11 @@ impl<B: InputBackend> InputState<B> {
         }
     }
 
-    /// ポートを閉じ、すぐに開き直す。開けなければ次の [`InputState::tick`] で再試行する。
-    pub fn reopen(&mut self) {
-        info!(port = %self.name, "MIDI 入力ポートを開き直します。");
+    /// ポートを閉じ、すぐに `name` を開く。開けなければ次の [`InputState::tick`] で再試行する。
+    pub fn reopen(&mut self, name: String) {
+        info!(from = %self.name, to = %name, "MIDI 入力ポートを開き直します。");
         self.disconnect();
+        self.name = name;
         self.connect();
     }
 
@@ -454,7 +456,7 @@ mod tests {
         let backend = FakeBackend::openable(PORT);
         let (mut input, mut rx) = connected(&backend);
 
-        input.reopen();
+        input.reopen(PORT.to_owned());
 
         assert_eq!(
             backend.take_calls(),
@@ -470,12 +472,31 @@ mod tests {
     }
 
     #[test]
+    fn reopen_opens_port_with_new_name() {
+        let backend = FakeBackend::openable(PORT);
+        let (mut input, _rx) = connected(&backend);
+
+        input.reopen("TourBox MIDI In".to_owned());
+        input.tick();
+
+        assert_eq!(
+            backend.take_calls(),
+            [
+                closed(PORT),
+                open("TourBox MIDI In", PortMode::Existing),
+                Call::List,
+            ],
+            "reopen は今のポートを閉じ、渡された名前ですぐに開く必要があります。"
+        );
+    }
+
+    #[test]
     fn reopen_retries_on_next_tick_when_reopening_fails() {
         let backend = FakeBackend::openable(PORT);
         let (mut input, _rx) = connected(&backend);
 
         backend.set_openable(None);
-        input.reopen();
+        input.reopen(PORT.to_owned());
         backend.set_openable(Some(PORT));
         input.tick();
 

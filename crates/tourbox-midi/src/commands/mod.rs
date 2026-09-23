@@ -2,6 +2,7 @@
 
 pub mod dump;
 pub mod list_ports;
+mod reload;
 pub mod run;
 
 use std::io::{self, IsTerminal};
