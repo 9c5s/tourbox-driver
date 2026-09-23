@@ -11,6 +11,7 @@ use tracing::{debug, info, warn};
 
 use crate::error::TransportError;
 use crate::protocol::{decode, Event, HapticConfig, NotAllowConfigDetector, UNLOCK};
+use crate::transport::ble::BleTransport;
 use crate::transport::usb::UsbTransport;
 use crate::transport::{ConnectionConfig, Incoming, Transport, TransportKind};
 
@@ -76,9 +77,8 @@ impl TransportFactory for HardwareFactory {
 
     fn open_ble(&self) -> BoxFuture<'_, Result<Box<dyn Transport>, TransportError>> {
         Box::pin(async {
-            Err(TransportError::Ble(
-                "BLE 接続はまだ実装されていません。".to_owned(),
-            ))
+            let transport = BleTransport::connect().await?;
+            Ok(Box::new(transport) as Box<dyn Transport>)
         })
     }
 }

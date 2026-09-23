@@ -8,7 +8,7 @@ use std::time::Duration;
 
 use futures::future::BoxFuture;
 use tokio::sync::mpsc::{self, error::TryRecvError};
-use tokio::time::{sleep_until, timeout, Instant};
+use tokio::time::{sleep, sleep_until, timeout, Instant};
 use tourbox::device::{Device, DeviceEvent, DeviceHandle, TransportFactory};
 use tourbox::error::TransportError;
 use tourbox::protocol::{
@@ -40,6 +40,8 @@ enum Opening {
 struct FactoryState {
     usb: Opening,
     ble: Opening,
+    /// BLE の接続を開く処理が結果を返すまでの時間 (スキャンの時間を模す)。
+    ble_delay: Duration,
     usb_calls: Vec<Option<String>>,
     ble_calls: usize,
 }
@@ -58,6 +60,7 @@ impl TestFactory {
             state: Arc::new(Mutex::new(FactoryState {
                 usb: Opening::Connect,
                 ble: Opening::Connect,
+                ble_delay: Duration::ZERO,
                 usb_calls: Vec::new(),
                 ble_calls: 0,
             })),
@@ -76,12 +79,22 @@ impl TestFactory {
         self.lock().ble = opening;
     }
 
+    fn set_ble_delay(&self, delay: Duration) {
+        self.lock().ble_delay = delay;
+    }
+
     fn usb_calls(&self) -> Vec<Option<String>> {
         self.lock().usb_calls.clone()
     }
 
     fn ble_calls(&self) -> usize {
         self.lock().ble_calls
+    }
+
+    /// USB と BLE の接続を開こうとした回数。
+    fn attempts(&self) -> (usize, usize) {
+        let state = self.lock();
+        (state.usb_calls.len(), state.ble_calls)
     }
 
     fn open(&self, opening: Opening) -> Result<Box<dyn Transport>, TransportError> {
@@ -107,12 +120,17 @@ impl TransportFactory for TestFactory {
     }
 
     fn open_ble(&self) -> BoxFuture<'_, Result<Box<dyn Transport>, TransportError>> {
-        let opening = {
+        let (opening, delay) = {
             let mut state = self.lock();
             state.ble_calls += 1;
-            state.ble
+            (state.ble, state.ble_delay)
         };
-        Box::pin(std::future::ready(self.open(opening)))
+        Box::pin(async move {
+            if !delay.is_zero() {
+                sleep(delay).await;
+            }
+            self.open(opening)
+        })
     }
 }
 
@@ -1176,7 +1194,7 @@ async fn auto_kind_uses_usb_when_found() {
 
 #[tokio::test(start_paused = true)]
 async fn auto_kind_falls_back_to_ble_when_usb_not_found() {
-    let device = start_with(auto_config(), HapticConfig::default());
+    let mut device = start_with(auto_config(), HapticConfig::default());
     device.factory.set_usb(Opening::NotFound);
 
     device.at(1).await;
@@ -1187,6 +1205,17 @@ async fn auto_kind_falls_back_to_ble_when_usb_not_found() {
         "USB が見つからなければ BLE を開く必要があります。"
     );
     assert_eq!(device.fake.sent(), vec![UNLOCK.to_vec()]);
+    device.at(RUNNING_AT + 1).await;
+    assert_eq!(
+        device.take_events(),
+        vec![DeviceEvent::Connected],
+        "BLE で開いた接続を初期化して Connected を送出する必要があります。"
+    );
+    assert_eq!(
+        device.factory.attempts(),
+        (1, 1),
+        "接続できたら開き直さない必要があります。"
+    );
 }
 
 #[tokio::test(start_paused = true)]
@@ -1194,17 +1223,21 @@ async fn auto_kind_retries_usb_without_ble_when_usb_busy() {
     let device = start_with(auto_config(), HapticConfig::default());
     device.factory.set_usb(Opening::Busy);
 
-    device.at(1001).await;
-    assert_eq!(
-        device.factory.usb_calls().len(),
-        2,
-        "USB が使用中なら、再接続の間隔で USB を試し直す必要があります。"
-    );
-    assert_eq!(
-        device.factory.ble_calls(),
-        0,
-        "USB が使用中なら BLE へ進まない必要があります。"
-    );
+    for (ms, usb) in [
+        (999, 1),
+        (1001, 2),
+        (2999, 2),
+        (3001, 3),
+        (6999, 3),
+        (7001, 4),
+    ] {
+        device.at(ms).await;
+        assert_eq!(
+            device.factory.attempts(),
+            (usb, 0),
+            "{ms} ms の時点で、BLE へ進まずに USB だけを {usb} 回試している必要があります (再接続の間隔は 1、2、4 秒)。"
+        );
+    }
 }
 
 #[tokio::test(start_paused = true)]
@@ -1213,15 +1246,39 @@ async fn auto_kind_retries_both_when_neither_found() {
     device.factory.set_usb(Opening::NotFound);
     device.factory.set_ble(Opening::NotFound);
 
-    device.at(999).await;
-    assert_eq!(device.factory.usb_calls().len(), 1);
-    assert_eq!(device.factory.ble_calls(), 1);
-    device.at(1001).await;
-    assert_eq!(
-        (device.factory.usb_calls().len(), device.factory.ble_calls()),
-        (2, 2),
-        "どちらも見つからなければ、再接続の間隔で USB から試し直す必要があります。"
-    );
+    for (ms, count) in [
+        (999, 1),
+        (1001, 2),
+        (2999, 2),
+        (3001, 3),
+        (6999, 3),
+        (7001, 4),
+    ] {
+        device.at(ms).await;
+        assert_eq!(
+            device.factory.attempts(),
+            (count, count),
+            "{ms} ms の時点で、USB と BLE をそれぞれ {count} 回試している必要があります (再接続の間隔は 1、2、4 秒)。"
+        );
+    }
+}
+
+#[tokio::test(start_paused = true)]
+async fn auto_kind_retry_interval_starts_when_ble_scan_ends() {
+    let device = start_with(auto_config(), HapticConfig::default());
+    device.factory.set_usb(Opening::NotFound);
+    device.factory.set_ble(Opening::NotFound);
+    device.factory.set_ble_delay(Duration::from_secs(10));
+
+    // BLE は開くたびに 10 秒かけて見つからないと返すので、試行は 0、11、23 秒に始まる
+    for (ms, count) in [(10_999, 1), (11_001, 2), (22_999, 2), (23_001, 3)] {
+        device.at(ms).await;
+        assert_eq!(
+            device.factory.attempts(),
+            (count, count),
+            "{ms} ms の時点で {count} 回試している必要があります。BLE の処理を打ち切らず、その終了から再接続の間隔を数える必要があります。"
+        );
+    }
 }
 
 // ---- 停止 ----
@@ -1253,6 +1310,45 @@ async fn shutdown_during_reconnect_wait_ends_task_without_reconnecting() {
         fake.close_count(),
         1,
         "切断で閉じた接続を、停止で重ねて閉じない必要があります。"
+    );
+}
+
+#[tokio::test(start_paused = true)]
+async fn shutdown_during_ble_scan_ends_task_without_waiting_for_scan() {
+    let device = start_with(
+        ConnectionConfig {
+            transport: TransportKind::Ble,
+            usb_port: None,
+        },
+        HapticConfig::default(),
+    );
+    device.factory.set_ble_delay(Duration::from_secs(10));
+    device.at(5000).await;
+    let Running {
+        fake,
+        factory,
+        mut events,
+        handle,
+        start,
+    } = device;
+
+    shutdown_without_waiting(handle).await;
+
+    assert_task_ended(&mut events);
+    sleep_until(start + Duration::from_secs(30)).await;
+    assert_eq!(
+        factory.ble_calls(),
+        1,
+        "停止した後は BLE を開き直さない必要があります。"
+    );
+    assert!(
+        fake.sent().is_empty(),
+        "開く途中で停止した接続を初期化しない必要があります。"
+    );
+    assert_eq!(
+        fake.close_count(),
+        0,
+        "開いていない接続を閉じない必要があります。"
     );
 }
 

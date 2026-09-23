@@ -1,5 +1,6 @@
 //! バイト列の送受信を担う接続の抽象と、接続の設定。
 
+pub mod ble;
 #[cfg(feature = "fake")]
 pub mod fake;
 pub mod usb;
