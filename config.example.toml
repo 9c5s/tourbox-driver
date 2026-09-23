@@ -3,7 +3,7 @@ transport = "auto"   # auto | usb | ble
 # usb_port = "COM3"  # auto と usb で使う明示指定。ble では無視
 
 [midi]
-output = "TourBox MIDI Out"  # macOS は仮想ポートをこの名前で作成、Windows は既存ポート名の部分一致で選択
+output = "TourBox MIDI Out"  # macOS は仮想ポートをこの名前で作成、Windows は既存ポート名の完全一致、なければ部分一致で選択
 input = "TourBox MIDI In"    # ハプティクス制御の受信用。省略可
 channel = 1                  # 既定チャンネル (1〜16)
 

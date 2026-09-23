@@ -324,7 +324,7 @@ transport = "auto"   # auto | usb | ble
 # usb_port = "COM3"  # auto と usb で使う明示指定。ble では無視
 
 [midi]
-output = "TourBox MIDI Out"  # macOS は仮想ポートをこの名前で作成、Windows は既存ポート名の部分一致で選択
+output = "TourBox MIDI Out"  # macOS は仮想ポートをこの名前で作成、Windows は既存ポート名の完全一致、なければ部分一致で選択
 input = "TourBox MIDI In"    # ハプティクス制御の受信用。省略可
 channel = 1                  # 既定チャンネル (1〜16)
 
@@ -374,7 +374,7 @@ top = { note = 70 }
 
 **検証と解決**
 
-- 範囲外の値 (`velocity` は 1〜127。0 は Note Off と同じ意味になるため含めない)、未知のキー、存在しないコントロール名、`note` と `cc` の両方指定、`step` の範囲外、修飾ボタン自身をその `[map.with.<ボタン>]` に割り当てた場合、`[haptics.control]` 内で同じ (チャンネル、CC 番号) を複数項目に割り当てた場合はエラーにする。
+- 範囲外の値 (`velocity` は 1〜127。0 は Note Off と同じ意味になるため含めない)、未知のキー、存在しないコントロール名、`note` と `cc` の両方指定、`step` の範囲外、修飾ボタン自身をその `[map.with.<ボタン>]` に割り当てた場合、`[haptics.control]` 内で同じ (チャンネル、CC 番号) を複数項目に割り当てた場合、ポート名 (`output`、`input`、`usb_port`) が空の文字列の場合はエラーにする。
 - 検証に通った設定は `Config::resolve_mapping()` で **MappingSet** に解決する。`[haptics.control]` は **HapticsControlConfig** として取り出す。MappingSet は「レイヤ (なし + 修飾ボタン) × 操作」ごとの割り当てで、チャンネルは `midi.channel` と項目の `channel` を解決済みの値として持つ。engine は MappingSet だけを受け取り、`midi.channel` を知らない。
 
 ### 5.3 修飾ボタンとメッセージの規則
@@ -399,7 +399,7 @@ top = { note = 70 }
   2. `map` と `midi.channel` から解決した MappingSet を engine の `replace_mapping()` に渡す。絶対 CC の内部値は、同じ「レイヤ × 操作」に同じ `cc`、`mode`、`encoding` の割り当てが残っていれば引き継ぎ、それ以外は `initial` に戻す。
   3. ハプティクス制御 (6.2 節) の `reset()` に新しい HapticsControlConfig と基準値 (`[haptics]` から作った HapticConfig) を渡して作り直し、実行中の上書きを捨て、返ってきた基準値を device の `set_haptics` に渡す。device 側のべき等性により、直前に送った値と同じなら送信は起きない。
   4. `midi` セクションの `output` か `input` に差分があれば該当ポートを開き直す。差分がなくても、Windows の入力ポートは再読込のたびに閉じて開き直す (6.2 節の復旧手順のため)。出力を開き直す前に、台帳にある On の Off を古いポートへ送ってから (失敗しても続行) 台帳を空にする。
-  5. `device` セクションに差分があれば `shutdown()` の完了を待ってから新しい設定で `Device::run` する。
+  5. `device` セクションに差分があれば `shutdown()` の完了を待ってから新しい設定で `Device::run` する。古い接続で受信して未処理のまま残ったイベントは捨て、捨てた件数を debug ログに出す。
 - 反映結果はログに出す。
 
 ### 5.5 engine の責務
@@ -425,7 +425,7 @@ engine は出力ポートの状態を知らない。出力が待機中でも run
 
 ### 6.2 MIDI 入力によるハプティクス制御
 
-- 設定の `input` 名で、macOS は仮想ポートを作成し、Windows は既存の入力ポートを選ぶ。選び方は出力と同じで、出力とは独立した状態として扱う (出力が待機中でも入力は動き、その逆も同じ)。`input` が未設定なら入力機能は無効である。
+- 設定の `input` 名で、macOS は仮想ポートを作成し、Windows は既存の入力ポートを選ぶ。選び方は出力と同じで、出力とは独立した状態として扱う (出力が待機中でも入力は動き、その逆も同じ)。`input` が未設定なら入力機能は無効である。このとき `[haptics.control]` があれば、起動時と再読込のたびに warn ログで知らせる。
 - macOS の自作仮想入力は Destination として登録され、自分の入力一覧 (`MidiInput::ports()` が返す Source) には現れないので、出力と同じく一覧による消失監視は行わず、作成失敗時の 5 秒ごとの再試行だけを行う。
 - Windows では、midir の入力接続に切断通知がなく、受信がないことと消失を区別できない。そのため 5 秒ごとにポート一覧を再評価し、選んだポート名がなくなっていたら接続を閉じて再試行状態に戻り、再び現れたら開き直す。
 - この方式で自動復帰を保証するのは、一覧の再評価で消失を 1 度でも観測できた場合に限る。5 秒未満で同名のポートが消えて再び現れた場合 (loopMIDI の短時間の再起動など) は消失を観測できず、旧接続が無効なまま残る可能性がある。この場合の復旧手順は、設定ファイルを保存し直して再読込を起こす (5.4 節の手順 4 で入力ポートを開き直す) か、アプリを再起動することとし、README に書く。5 秒未満の再起動で旧接続がどうなるかは受け入れ確認 (9 章) で実機確認する。
@@ -449,13 +449,13 @@ engine は出力ポートの状態を知らない。出力が待機中でも run
 
 - `tourbox-midi [--config <path>] [--verbose]`: 常駐する。
 - `tourbox-midi list-ports`: MIDI の入出力ポートを一覧表示する。
-- `tourbox-midi dump [--transport <auto|usb|ble>] [--usb-port <name>]`: 設定ファイルを読まず、引数の接続設定と既定の HapticConfig でデバイスに接続し、DeviceEvent を表示する。MIDI は送らない。動作確認用である。
+- `tourbox-midi [--verbose] dump [--transport <auto|usb|ble>] [--usb-port <name>]`: 設定ファイルを読まず、引数の接続設定と既定の HapticConfig でデバイスに接続し、DeviceEvent を表示する。MIDI は送らない。動作確認用である。
 
 ## 7. エラー処理とログ
 
-- 起動時に終了する致命エラーは、設定ファイルの構文エラーや検証エラー (終了コード 1、原因を行番号付きで表示) と、不正なコマンドライン引数 (clap の既定に従い終了コード 2。ヘルプとバージョン表示は 0。https://docs.rs/clap/latest/clap/error/struct.Error.html#method.exit_code) である。
+- 起動時に終了する致命エラーは、設定ファイルの構文エラーや検証エラー (終了コード 1、原因を行番号付きで表示)、環境変数 `RUST_LOG` の値を解釈できない場合 (終了コード 1。常駐と `dump` の両方)、不正なコマンドライン引数 (clap の既定に従い終了コード 2。ヘルプとバージョン表示は 0。https://docs.rs/clap/latest/clap/error/struct.Error.html#method.exit_code) である。
 - 継続して再試行する回復可能エラーは、デバイス未検出や切断、MIDI ポート未検出や送信失敗、再読込時の設定エラーである。いずれもログに出し、4 章と 6 章で定めた間隔で再試行する。
-- ライブラリ側のエラー型は thiserror でモジュールごとに定義する (transport は I/O、BLE、未検出、使用中)。device はエラー型を持たず、初期化失敗と切断はログと `Disconnected` で表す。protocol はエラー型を持たない。実行ファイル側は anyhow で文脈を付けて集約する。
+- ライブラリ側のエラー型は、`error` モジュールに thiserror で定義した `TransportError` (I/O、BLE、未検出、使用中) だけで、transport がこれを返す。device はエラー型を持たず、初期化失敗と切断はログと `Disconnected` で表す。protocol もエラー型を持たない。実行ファイル側は anyhow で文脈を付けて集約する。
 - 黙って捨てない。ポート未接続で捨てたイベントは debug ログに、状態の変化 (接続、切断、ポート消失、復帰、再読込) は info または warn ログに必ず出す。
 - ログは tracing で標準エラー出力に出し、`RUST_LOG` があればその絞り込みに従う。`RUST_LOG` がなければ、常駐は `info`、`dump` は `tourbox=debug,info` (4.3 節の各状態の受信バイトを含む) を使う。`--verbose` は `RUST_LOG` がないときの絞り込みを `debug` にし、受信バイトと送信 MIDI をすべて表示する。
 
