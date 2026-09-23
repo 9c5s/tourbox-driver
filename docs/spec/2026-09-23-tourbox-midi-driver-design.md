@@ -176,6 +176,7 @@ tourbox-driver/
     src/protocol/            # ボタン、軸、イベント、メッセージの変換
     src/transport/           # Transport トレイト、usb、ble、fake (feature)
     src/device.rs            # 接続の一生の管理
+    src/error.rs             # transport のエラー型
     tests/                   # 統合テスト (fake feature を使う)
   crates/tourbox-midi/       # 実行ファイル (lib + 薄い main)
     src/lib.rs               # 各モジュールの登録。テストはここから内部 API に届く
@@ -183,9 +184,13 @@ tourbox-driver/
     src/cli.rs               # clap の定義
     src/config/              # TOML の読込と検証、解決、監視、差分
     src/engine.rs            # 修飾状態、絶対値、Event から MIDI への変換
+    src/midi_msg.rs          # Note On、Note Off、CC の 3 バイト表現
     src/midi.rs              # ポートの列挙と選択、送受信
+    src/output.rs            # 出力ポートの再試行状態と台帳
+    src/input.rs             # 入力ポートの再試行状態
     src/haptics.rs           # 受信 MIDI からハプティクス設定への変換
     src/commands/            # run、dump、list-ports
+    src/commands/reload.rs   # 設定の再読込の反映手順
   docs/protocol/haptic-captures.md   # 実機キャプチャ (テストの期待値)
   config.example.toml
   lefthook.yml
@@ -296,7 +301,7 @@ btleplug の切断イベントを切断とみなす。
 
 btleplug の README によると、macOS 11 以降で BLE を使うには、アプリバンドルの Info.plist に `NSBluetoothAlwaysUsageDescription` を入れるか、コマンドラインアプリではそれを起動するターミナルアプリに「システム設定 > プライバシーとセキュリティ > Bluetooth」で権限を与える必要がある (https://github.com/deviceplug/btleplug#macos)。
 この設定画面の名称は macOS 13 以降のものであり、macOS 11 と 12 では「システム環境設定 > セキュリティとプライバシー > プライバシー > Bluetooth」である。
-本アプリはコマンドラインで配布するため、後者を README に書き、権限がない場合は ble 接続を失敗として扱ってログに案内を出す。
+本アプリはコマンドラインで配布するため、ターミナルアプリへの権限付与の手順を README に書き、権限がない場合は ble 接続を失敗として扱ってログに案内を出す。
 
 ## 5. マッピングと設定ファイル (crates/tourbox-midi)
 
@@ -363,7 +368,7 @@ top = { note = 70 }
 - `invert`: 回転方向を反転する (既定 false)。
 - `channel`: チャンネルの上書き。
 
-ボタンの項目は `note` か `cc` のどちらか一方を持ち、`velocity` と `channel` を上書きできる。
+ボタンの項目は `note` か `cc` のどちらか一方を持ち、`channel` を上書きできる。`velocity` は `note` の項目だけで上書きできる。
 
 **検証と解決**
 
@@ -409,7 +414,7 @@ engine は出力ポートの状態を知らない。出力が待機中でも run
 出力ポートの扱いは OS で分ける。
 
 - macOS では設定の `output` 名で仮想ポートを作成する。CoreMIDI では自作の仮想出力は Source として登録され、他のアプリの入力一覧に現れる。自分の出力一覧 (`MidiOutput::ports()` が返す Destination) には現れないので、一覧による消失監視は行わない (midir の CoreMIDI 実装 https://github.com/Boddlnagg/midir/blob/master/src/backend/coremidi/mod.rs で確認)。作成に失敗したら 5 秒ごとに再試行し、送信エラーが起きたら閉じて作り直す。
-- Windows では既存の出力ポートを `output` 名で選ぶ (`select_port`)。完全一致を優先し、次に部分一致、複数あればログに候補を出して先頭を使う。見つからなければ候補一覧をログに出し、5 秒ごとに再試行する。loopMIDI を後から起動した場合に備えるためである。接続中も 5 秒ごとに一覧を再評価し、選んだポート名がなくなっていたら閉じて再試行状態に戻る。
+- Windows では既存の出力ポートを `output` 名で選ぶ (`port_candidates`)。完全一致を優先し、次に部分一致、複数あればログに候補を出して先頭を使う。見つからなければ候補一覧をログに出し、5 秒ごとに再試行する。loopMIDI を後から起動した場合に備えるためである。接続中も 5 秒ごとに一覧を再評価し、選んだポート名がなくなっていたら閉じて再試行状態に戻る。
 - 出力ポートの待機中も、設定ファイルの監視と Ctrl+C の受付は動く。誤ったポート名を設定ファイルで直せば、再読込で待機から抜ける。待機中も DeviceEvent は engine に渡して状態を更新し、engine が返した Outgoing だけを捨てる (溜めない)。絶対 CC の内部値は待機中の回転でも進むため、復帰後の DAW の値と一致しないことがある。
 - 送るのは Note On、Note Off、Control Change の 3 バイトメッセージのみとし、ランニングステータスは使わない。
 - 出力層は**台帳**を持つ。由来が `ButtonOn` の送信に成功したら (チャンネル、種類、番号) を台帳に入れ、由来が `ButtonOff` の送信に成功したら台帳から消す。`ButtonOff` の送信に失敗した場合は台帳に残る。由来が `Rotation` のメッセージは台帳を変更しない。
@@ -448,7 +453,7 @@ engine は出力ポートの状態を知らない。出力が待機中でも run
 
 - 起動時に終了する致命エラーは、設定ファイルの構文エラーや検証エラー (終了コード 1、原因を行番号付きで表示) と、不正なコマンドライン引数 (clap の既定に従い終了コード 2。ヘルプとバージョン表示は 0。https://docs.rs/clap/latest/clap/error/struct.Error.html#method.exit_code) である。
 - 継続して再試行する回復可能エラーは、デバイス未検出や切断、MIDI ポート未検出や送信失敗、再読込時の設定エラーである。いずれもログに出し、4 章と 6 章で定めた間隔で再試行する。
-- ライブラリ側のエラー型は thiserror でモジュールごとに定義する (transport は I/O、BLE、未検出、使用中、device は初期化失敗と切断)。protocol はエラー型を持たない。実行ファイル側は anyhow で文脈を付けて集約する。
+- ライブラリ側のエラー型は thiserror でモジュールごとに定義する (transport は I/O、BLE、未検出、使用中)。device はエラー型を持たず、初期化失敗と切断はログと `Disconnected` で表す。protocol はエラー型を持たない。実行ファイル側は anyhow で文脈を付けて集約する。
 - 黙って捨てない。ポート未接続で捨てたイベントは debug ログに、状態の変化 (接続、切断、ポート消失、復帰、再読込) は info または warn ログに必ず出す。
 - ログは tracing で、`RUST_LOG` で制御し、既定は info である。`--verbose` で受信バイトと送信 MIDI をすべて表示する。
 

@@ -8,7 +8,7 @@
 
 **Architecture:** Cargo ワークスペースに、デバイス通信だけを担うライブラリ `tourbox` (protocol、transport、device) と、設定ファイルに従って操作を MIDI に変換する実行ファイル `tourbox-midi` (lib + 薄い main。config、engine、midi、haptics、commands) を置く。ライブラリは MIDI を知らず、実行ファイルはプロトコルのバイト列を知らない。
 
-**Tech Stack:** Rust (stable)、tokio、serialport、btleplug、midir、notify + notify-debouncer-mini、toml + serde、clap、thiserror、anyhow、tracing、lefthook、GitHub Actions。
+**Tech Stack:** Rust (stable)、tokio、serialport、btleplug、midir、notify + notify-debouncer-mini、toml、clap、thiserror、anyhow、tracing、lefthook、GitHub Actions。
 
 **Spec:** `docs/spec/2026-09-23-tourbox-midi-driver-design.md`
 
@@ -157,7 +157,7 @@
 
 - [ ] `config.example.toml` を設計書 5.2 節の内容で書く
 - [ ] 次のテストを先に書き、失敗を確認する: example が読み込める、空ファイルが必須セクション欠落のエラーになる、範囲外の CC 番号、未知のキー、存在しないコントロール名、`note` と `cc` の両方指定、相対 CC の `step` が 64 (Review Focus 5) と絶対 CC の `step` が 128、`[haptics.control]` の (チャンネル、CC) 重複がそれぞれ行番号付きのエラーになる、`[haptics]` の既定値 (strong、medium) と修飾ごとの上書きが HapticConfig に反映される、`midi.channel` と項目の `channel` が MappingSet に解決される、`default_config_path()` が OS ごとの値を返す、`transport = "auto"` と `usb_port` の併用が ConnectionConfig に両方入る
-- [ ] serde と toml (span 付きエラー) で実装し、テストを通す
+- [ ] toml (span 付きエラー) で実装し、テストを通す
 - [ ] コミット (`feat: 設定ファイルの読込と検証を追加`)
 
 ### Task 9: engine (修飾レイヤと MIDI 変換)
@@ -181,9 +181,9 @@
 - Test: 同ファイル内の `#[cfg(test)]` (名前選択と受信解析のみ)
 
 **Interfaces:**
-- Produces: `select_port(候補名一覧, 設定名) -> Option<usize>` (完全一致、部分一致、複数なら先頭)、`list_output_names()` と `list_input_names()`、`PortMode` (`Virtual` は macOS の自作ポート、`Existing` は Windows の既存ポート。`cfg` で既定を決める)、`MidiOut::open(name, PortMode)`、`MidiOut::send(MidiMessage)`、`MidiIn::open(name, PortMode, 送信先チャネル)`、`parse_control_change(&[u8]) -> Option<(channel, cc, value)>`、CLI の `list-ports`
+- Produces: `port_candidates(候補名一覧, 設定名) -> Vec<usize>` (完全一致があれば完全一致だけ、なければ部分一致を一覧の順に返す。呼び出し側が先頭を使う)、`list_output_names()` と `list_input_names()`、`PortMode` (`Virtual` は macOS の自作ポート、`Existing` は Windows の既存ポート。`cfg` で既定を決める)、`MidiOut::open(name, PortMode)`、`MidiOut::send(MidiMessage)`、`MidiIn::open(name, PortMode, 送信先チャネル)`、`parse_control_change(&[u8]) -> Option<(channel, cc, value)>`、CLI の `list-ports`
 
-- [ ] `select_port` (完全一致の優先、部分一致、複数候補で先頭、該当なし) と `parse_control_change` (CC は返す、Note やシステムメッセージは None) のテストを書き、失敗を確認する
+- [ ] `port_candidates` (完全一致の優先、部分一致、複数候補は一覧の順、該当なし) と `parse_control_change` (CC は返す、Note やシステムメッセージは None) のテストを書き、失敗を確認する
 - [ ] midir で出力と入力を実装し、OS ごとの分岐を `cfg` で書く。`list-ports` を実装する
 - [ ] Windows で loopMIDI のポート、macOS で仮想ポートが `list-ports` と DAW から見えることを確認する
 - [ ] コミット (`feat: MIDI ポートの選択と送受信を追加`)
@@ -207,7 +207,7 @@
 ### Task 12: MIDI 入力によるハプティクス制御
 
 **Files:**
-- Create: `crates/tourbox-midi/src/haptics.rs`
+- Create: `crates/tourbox-midi/src/haptics.rs`、`crates/tourbox-midi/src/input.rs` (入力ポートの再試行状態)
 - Modify: `crates/tourbox-midi/src/commands/run.rs`
 
 **Interfaces:**
@@ -223,7 +223,7 @@
 ### Task 13: 設定ファイルの自動再読込
 
 **Files:**
-- Create: `crates/tourbox-midi/src/config/watch.rs`、`crates/tourbox-midi/src/config/diff.rs`
+- Create: `crates/tourbox-midi/src/config/watch.rs`、`crates/tourbox-midi/src/config/diff.rs`、`crates/tourbox-midi/src/commands/reload.rs` (再読込の反映手順)
 - Modify: `crates/tourbox-midi/src/commands/run.rs`
 
 **Interfaces:**
