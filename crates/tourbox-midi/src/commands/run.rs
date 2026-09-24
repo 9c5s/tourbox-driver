@@ -155,7 +155,12 @@ impl<B: OutputBackend, I: InputBackend + Clone, D: DeviceLink> Resident<B, I, D>
         mode: PortMode,
         mut device: D,
     ) -> Self {
-        let mut output = OutputState::new(output_backend, config.midi.output.clone(), mode);
+        let mut output = OutputState::new(
+            output_backend,
+            config.midi.output.clone(),
+            mode,
+            Instant::now,
+        );
         output.tick();
         let events = device.start(config.to_connection_config(), config.to_haptic_config());
         let input = prepare_input(input_backend, mode, config);
