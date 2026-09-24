@@ -31,3 +31,4 @@ zizmor の指摘は既定の重大度で扱い、抑制が必要な場合はワ�
 - 検査の一覧は fmt、build、clippy、test、lint-adr、actionlint、zizmor の 7 つになる。ADR-0009 と ADR-0015 の一覧はこの ADR で置き換える。
 - ツールが未導入の環境では pre-commit が失敗する。README の開発環境の準備に導入手順を書く。
 - zizmor の検査で既存のワークフローに指摘が出た場合は、この ADR の実装で直す。
+- 2026-09-24: ワークフローの検査ジョブは ubuntu-latest で実行する。YAML の静的検査は OS に依存せず、zizmor-action と actionlint の Docker イメージが Linux のランナーを前提とするためである。実装計画の Global Constraints の対象 OS は製品のビルドと検査の対象を定めたもので、この運用と矛盾しない。

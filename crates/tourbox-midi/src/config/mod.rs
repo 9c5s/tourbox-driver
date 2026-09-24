@@ -291,7 +291,7 @@ mod tests {
         assert_eq!(
             load_example(),
             example_config(),
-            "設定例を README の受け入れ確認に記載した割り当てのとおりに解釈する必要があります。"
+            "設定例を README の設定例の割り当ての節のとおりに解釈する必要があります。"
         );
     }
 

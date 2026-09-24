@@ -14,7 +14,7 @@ pre-commit:
       glob: "{**/*.rs,**/Cargo.toml,Cargo.lock}"
       run: cargo clippy --all-targets -- -D warnings
     - name: test
-      glob: "{**/*.rs,**/Cargo.toml,Cargo.lock,docs/protocol/**}"
+      glob: "{**/*.rs,**/Cargo.toml,Cargo.lock,docs/protocol/**,config.example.toml}"
       run: cargo test
     - name: lint-adr
       glob: "{docs/adr/**,xtask/**}"

@@ -33,3 +33,4 @@ CI と lefthook の pre-commit に `cargo build` を加え、出荷構成 (`fake
 - 実装計画の Global Constraints と設計書 8.2 節の検査一覧に `cargo build` を加える。ADR-0009 の pre-commit の一覧 (3 つ) は、ADR-0012 の `lint-adr` と本 ADR の `build` を加えた 5 つになる。
 - `cargo test -p tourbox-midi` を単独で実行した場合は `fake` が有効にならない。`tourbox-midi` のテストがフェイクを必要とする場合は、その時点で `tourbox-midi` の dev-dependencies に `tourbox = { path = "../tourbox", features = ["fake"] }` を加える。
 - 検査が 1 つ増えるが、`cargo build` の成果物は `cargo test` と共有されないため、pre-commit の所要時間が増える。問題になったら `build` と `test` を pre-push に移す。
+- 2026-09-24: 検査に actionlint と zizmor を加え、7 つになった (ADR-0019)。
