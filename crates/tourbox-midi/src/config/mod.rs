@@ -127,10 +127,10 @@ fn config_path_in(base_dir: Option<OsString>) -> PathBuf {
 
 #[cfg(test)]
 mod tests {
-    use std::collections::HashMap;
+    use std::collections::{HashMap, HashSet};
     use std::error::Error;
 
-    use tourbox::protocol::{Axis, Button, Speed, Strength};
+    use tourbox::protocol::{Axis, Button, Modifier, Speed, Strength};
     use tourbox::transport::TransportKind;
 
     use super::*;
@@ -159,8 +159,69 @@ mod tests {
         }
     }
 
-    /// 設計書 5.2 節の例 (十字キーの行を含む) の検証結果。
-    fn documented_example() -> Config {
+    /// 設定例のボタンと Note 番号。チャンネルはどれも既定 (`midi.channel`) を使う。
+    const EXAMPLE_NOTES: [(Button, u8); 14] = [
+        (Button::Tall, 60),
+        (Button::Short, 61),
+        (Button::Top, 62),
+        (Button::Side, 63),
+        (Button::ScrollPress, 64),
+        (Button::DpadUp, 65),
+        (Button::DpadDown, 66),
+        (Button::DpadLeft, 67),
+        (Button::DpadRight, 68),
+        (Button::C1, 69),
+        (Button::C2, 70),
+        (Button::Tour, 71),
+        (Button::KnobPress, 72),
+        (Button::DialPress, 73),
+    ];
+
+    fn load_example() -> Config {
+        Config::load(&example_path())
+            .unwrap_or_else(|error| panic!("設定例を読み込める必要があります: {error}"))
+    }
+
+    /// 設定例の `[haptics.control]` の検証結果。
+    fn example_haptics_control() -> HapticsControlConfig {
+        HapticsControlConfig {
+            channel: Some(15),
+            master: Some(99),
+            axes: HashMap::from([
+                (
+                    Axis::Knob,
+                    ControlCc {
+                        cc: Some(100),
+                        speed_cc: None,
+                    },
+                ),
+                (
+                    Axis::Scroll,
+                    ControlCc {
+                        cc: Some(101),
+                        speed_cc: Some(102),
+                    },
+                ),
+                (
+                    Axis::Dial,
+                    ControlCc {
+                        cc: Some(103),
+                        speed_cc: Some(104),
+                    },
+                ),
+            ]),
+            with: HashMap::from([(
+                (Button::Side, Axis::Knob),
+                ControlCc {
+                    cc: Some(110),
+                    speed_cc: None,
+                },
+            )]),
+        }
+    }
+
+    /// 設定例の検証結果。
+    fn example_config() -> Config {
         Config {
             device: ConnectionConfig {
                 transport: TransportKind::Auto,
@@ -172,29 +233,16 @@ mod tests {
                 channel: 0,
             },
             haptics: HapticsSection {
-                axes: HashMap::from([
-                    (
-                        Axis::Knob,
-                        HapticSetting {
+                axes: Axis::ALL
+                    .into_iter()
+                    .map(|axis| {
+                        let setting = HapticSetting {
                             strength: Strength::Strong,
                             speed: Speed::Medium,
-                        },
-                    ),
-                    (
-                        Axis::Scroll,
-                        HapticSetting {
-                            strength: Strength::Weak,
-                            speed: Speed::Fast,
-                        },
-                    ),
-                    (
-                        Axis::Dial,
-                        HapticSetting {
-                            strength: Strength::Off,
-                            speed: Speed::Medium,
-                        },
-                    ),
-                ]),
+                        };
+                        (axis, setting)
+                    })
+                    .collect(),
                 with: HashMap::from([(
                     (Button::Side, Axis::Knob),
                     HapticOverride {
@@ -202,49 +250,14 @@ mod tests {
                         speed: None,
                     },
                 )]),
-                control: HapticsControlConfig {
-                    channel: Some(15),
-                    master: Some(99),
-                    axes: HashMap::from([
-                        (
-                            Axis::Knob,
-                            ControlCc {
-                                cc: Some(100),
-                                speed_cc: None,
-                            },
-                        ),
-                        (
-                            Axis::Scroll,
-                            ControlCc {
-                                cc: Some(101),
-                                speed_cc: Some(102),
-                            },
-                        ),
-                    ]),
-                    with: HashMap::from([(
-                        (Button::Side, Axis::Knob),
-                        ControlCc {
-                            cc: Some(110),
-                            speed_cc: None,
-                        },
-                    )]),
-                },
+                control: example_haptics_control(),
             },
             map: MapSection {
                 base: MapLayer {
-                    buttons: HashMap::from([
-                        (Button::Tall, note(60, None)),
-                        (
-                            Button::Top,
-                            ButtonEntry {
-                                channel: None,
-                                kind: ButtonKind::Cc { cc: 20 },
-                            },
-                        ),
-                        (Button::C1, note(62, Some(1))),
-                        (Button::KnobPress, note(64, None)),
-                        (Button::DpadUp, note(65, None)),
-                    ]),
+                    buttons: EXAMPLE_NOTES
+                        .into_iter()
+                        .map(|(button, number)| (button, note(number, None)))
+                        .collect(),
                     rotations: HashMap::from([
                         (Axis::Knob, absolute(1, 1, false)),
                         (
@@ -259,13 +272,13 @@ mod tests {
                                 },
                             },
                         ),
-                        (Axis::Dial, absolute(3, 2, true)),
+                        (Axis::Dial, absolute(3, 1, false)),
                     ]),
                 },
                 with: HashMap::from([(
                     Button::Side,
                     MapLayer {
-                        buttons: HashMap::from([(Button::Top, note(70, None))]),
+                        buttons: HashMap::from([(Button::Top, note(74, None))]),
                         rotations: HashMap::from([(Axis::Knob, absolute(11, 1, false))]),
                     },
                 )]),
@@ -275,13 +288,110 @@ mod tests {
 
     #[test]
     fn example_file_loads_as_documented() {
-        let config = Config::load(&example_path())
-            .unwrap_or_else(|error| panic!("設定例を読み込める必要があります: {error}"));
+        assert_eq!(
+            load_example(),
+            example_config(),
+            "設定例を README の受け入れ確認に記載した割り当てのとおりに解釈する必要があります。"
+        );
+    }
+
+    #[test]
+    fn example_file_assigns_own_message_to_every_control() {
+        let mapping = load_example().resolve_mapping();
+
+        // (チャンネル、メッセージの種類、番号) の組
+        let mut messages = HashSet::new();
+        for button in Button::ALL {
+            let assignment = mapping.button(None, button).unwrap_or_else(|| {
+                panic!("設定例の基本レイヤで {button:?} に割り当てがある必要があります。")
+            });
+            let message = match assignment.kind {
+                ButtonKind::Note { note, .. } => (assignment.channel, "Note", note),
+                ButtonKind::Cc { cc } => (assignment.channel, "CC", cc),
+            };
+            assert!(
+                messages.insert(message),
+                "設定例の {button:?} には、ほかの操作と異なるメッセージを割り当てる必要があります: {message:?}"
+            );
+        }
+        for axis in Axis::ALL {
+            let assignment = mapping.rotation(None, axis).unwrap_or_else(|| {
+                panic!("設定例の基本レイヤで {axis:?} に割り当てがある必要があります。")
+            });
+            let message = (assignment.channel, "CC", assignment.cc);
+            assert!(
+                messages.insert(message),
+                "設定例の {axis:?} には、ほかの操作と異なるメッセージを割り当てる必要があります: {message:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn example_file_resolves_side_layer() {
+        let mapping = load_example().resolve_mapping();
 
         assert_eq!(
-            config,
-            documented_example(),
-            "設定例を設計書 5.2 節のとおりに解釈する必要があります。"
+            mapping.modifiers(),
+            &[Button::Side],
+            "設定例の修飾ボタンは Side だけである必要があります。"
+        );
+        assert_eq!(
+            mapping.button(None, Button::Side),
+            Some(&ButtonAssignment {
+                channel: 0,
+                kind: ButtonKind::Note {
+                    note: 63,
+                    velocity: 127,
+                },
+            }),
+            "修飾ボタンの Side 自身も、基本レイヤの Note 63 を送る必要があります。"
+        );
+        assert_eq!(
+            mapping.rotation(Some(Button::Side), Axis::Knob),
+            Some(&RotationAssignment {
+                channel: 0,
+                cc: 11,
+                invert: false,
+                mode: RotationMode::Absolute {
+                    step: 1,
+                    initial: 0,
+                },
+            }),
+            "Side のレイヤでは、Knob が CC 11 を送る必要があります。"
+        );
+        assert_eq!(
+            mapping.button(Some(Button::Side), Button::Top),
+            Some(&ButtonAssignment {
+                channel: 0,
+                kind: ButtonKind::Note {
+                    note: 74,
+                    velocity: 127,
+                },
+            }),
+            "Side のレイヤでは、Top が Note 74 を送る必要があります。"
+        );
+    }
+
+    #[test]
+    fn example_file_resolves_haptics() {
+        let config = load_example();
+
+        let mut expected = HapticConfig::default();
+        expected.set(
+            Axis::Knob,
+            Modifier::Button(Button::Side),
+            Strength::Weak,
+            Speed::Medium,
+        );
+        assert_eq!(
+            config.to_haptic_config(),
+            expected,
+            "設定例のハプティクスは、Side を押している間の Knob だけを弱にし、ほかはすべて強、中速にする必要があります。"
+        );
+        assert_eq!(
+            config.haptics_control(),
+            example_haptics_control(),
+            "設定例の [haptics.control] を解決できる必要があります。"
         );
     }
 

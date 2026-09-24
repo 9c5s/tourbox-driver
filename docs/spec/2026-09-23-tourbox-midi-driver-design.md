@@ -318,6 +318,8 @@ btleplug の README によると、macOS 11 以降で BLE を使うには、ア�
 
 ### 5.2 構造
 
+同梱の `config.example.toml` はすべてのコントロールに割り当てを持つ実用的な例であり、構造の説明は本節の例による。
+
 ```toml
 [device]
 transport = "auto"   # auto | usb | ble
@@ -470,7 +472,7 @@ engine は出力ポートの状態を知らない。出力が待機中でも run
 - transport: fake の振る舞い自体をテストする。usb と ble の実装は自動テストの対象外とし、`dump` サブコマンドで手動確認する。ble の 20 バイト分割と 10 ms 間隔は純粋関数として切り出してテストする。usb の候補ポート絞り込み (VID/PID) も列挙結果の型を入力にしてテストする。usb がポートを開くときの設定は、`port_builder(path)` の戻り値を、テスト側で `serialport::new(path, 115200)` に `timeout(100 ms)` と `dtr_on_open(true)` を付けて組み立てた期待値と `PartialEq` で比較してテストする (期待値の組み立てに `port_builder` は使わない)。
 - device: fake を使って、初期化の状態機械 (送信順序、`Unlocking` と `Configuring` の受信を捨てる、静穏タイマーが受信のたびに再設定される、1 秒の打ち切り境界、`Connected` の送出タイミング)、`Running` での 1 バイト復号 (20 バイト以上のかたまりも全件)、`NOT_ALLOW_CONFIG` が `Configuring` と `Running` をまたいで分割到着した場合の再初期化、`set_haptics` の契約 (送信完了から 50 ms の間隔、送信中の更新は完了後に最新値だけ、べき等、初期化中と切断中の保持。送信に時間のかかる fake を使う)、再接続の間隔、`shutdown` が再接続待機中、初期化中、送信中のいずれからでも `close` を呼んでタスクを終える、を tokio の時間を止めて検証する。
 - engine: 修飾レイヤの切替とフォールバック、昇格しないこと、絶対 CC の 0〜127 への丸めと `step` と `initial` と `invert`、相対 CC の 2 方式の符号化と両方向、押下と解放の対応、Outgoing の由来 (ボタンの Note と CC は `ButtonOn` と `ButtonOff`、回転は `Rotation`)、`release_all` の内容、MappingSet 差し替え時の内部値の引き継ぎ条件を表駆動で確認する。
-- config: `config.example.toml` が読み込めること、5.2 節の検証項目がそれぞれ行番号付きのエラーになること、空ファイルが必須セクション欠落のエラーになること、既定値と修飾ごとの上書きが HapticConfig に反映されること、MappingSet のチャンネル解決、`default_config_path()` の OS 別の値、差分検出 (5.4 節の各セクション)。
+- config: `config.example.toml` が読み込めてすべてのコントロールに割り当てを持つこと、5.2 節の検証項目がそれぞれ行番号付きのエラーになること、空ファイルが必須セクション欠落のエラーになること、既定値と修飾ごとの上書きが HapticConfig に反映されること、MappingSet のチャンネル解決、`default_config_path()` の OS 別の値、差分検出 (5.4 節の各セクション)。
 - midi: ポート名の選択ロジック、機器 ID の識別子による出力ポートの対応付け (WinRT で取得した実機の ID を期待値に使う) と、受信バイト列から Control Change だけを取り出す関数を単体テストする。出力層は、ポートの開閉と送信と一覧取得を差し替えられる形にして、台帳の更新 (`ButtonOn` の成功で追加、`ButtonOff` の成功で削除、`ButtonOff` の失敗で残る、`Rotation` は変更しない。絶対値 127 と相対値の 127 が台帳に入らないことを含む)、復帰時の Off 送信、待機中も engine の状態更新が続くこと (待機中の修飾解放が復帰後に反映される)、Windows 方式での 5 秒ごとの再評価による消失と再出現の検知、macOS 方式では一覧に自分のポートがなくても閉じないことと作成失敗時の再試行、を検証する。入力層も同じ形で両方式を検証する。実ポートの開閉は手動確認とする。
 - haptics: 6.2 節の規則 (チャンネル、値域、軸と組み合わせの適用範囲、master の保持と復帰、再読込時の作り直し) を表駆動で確認する。
 

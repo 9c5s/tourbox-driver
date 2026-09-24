@@ -1,36 +1,81 @@
+# tourbox-midi の設定例
+#
+# すべてのコントロールに割り当てがあり、コピーすればそのまま使える。
+# Note 番号と CC 番号は、DAW 側の使い方に合わせて好みで変える。
+# 置き場所は、Windows が %APPDATA%\tourbox-midi\config.toml、
+# macOS が ~/Library/Application Support/tourbox-midi/config.toml である (--config で変えられる)。
+# 常駐中に保存すると自動で再読込する。誤りがあれば前の設定を維持し、理由をログに出す。
+
+# TourBox との接続
 [device]
-transport = "auto"   # auto | usb | ble
-# usb_port = "COM3"  # auto と usb で使う明示指定。ble では無視
+transport = "auto"   # auto (USB を先に探し、なければ BLE をスキャンする) | usb | ble
+# usb_port = "COM3"  # USB のポート名の明示指定。auto と usb で使い、省略すると自動で検出する。ble では無視
 
+# MIDI のポートと既定のチャンネル
 [midi]
-output = "TourBox MIDI Out"  # macOS は仮想ポートをこの名前で作成、Windows は既存ポート名の完全一致、なければ部分一致で選択
-input = "TourBox MIDI In"    # ハプティクス制御の受信用。省略可
-channel = 1                  # 既定チャンネル (1〜16)
+output = "TourBox MIDI Out"  # 出力ポート。macOS はこの名前で仮想ポートを作成し、Windows は既存のポートから完全一致、なければ部分一致で選ぶ
+input = "TourBox MIDI In"    # [haptics.control] の CC を受信する入力ポート。省略すると受信しない
+channel = 1                  # 既定のチャンネル (1〜16)。[map] の各項目の channel で上書きできる
 
+# 回転操作のハプティクス (手応え)
+#   strength: off | weak | strong (既定 strong)
+#   speed:    fast | medium | slow (既定 medium)。公式コンソールの「回転速度」に当たる
 [haptics]
 knob = { strength = "strong", speed = "medium" }
-scroll = { strength = "weak", speed = "fast" }
-dial = { strength = "off" }
-[haptics.with.side]          # 修飾と軸の組み合わせの上書き (省略時は軸の値を継承)
+scroll = { strength = "strong", speed = "medium" }
+dial = { strength = "strong", speed = "medium" }
+
+# 修飾ボタン (ここでは Side) を押している間の上書き。省略したキーは上の軸の値を継承する
+[haptics.with.side]
 knob = { strength = "weak" }
 
-[haptics.control]            # 受信 MIDI によるハプティクス制御 (6.2 節)
+# 入力ポートで受信した CC によるハプティクスの切り替え。変更は設定ファイルに書き戻さない
+#   channel: 受信するチャンネル (1〜16)。省略すると全チャンネル
+#   master:  値 0〜63 で全軸をなしにし、64〜127 で設定値に戻す
+#   <軸>:    cc は値 0 でなし、1〜63 で弱、64〜127 で強。speed_cc は値 0〜42 で速い、43〜85 で中速、86〜127 で遅い
+[haptics.control]
 channel = 16
 master = { cc = 99 }
 knob = { cc = 100 }
 scroll = { cc = 101, speed_cc = 102 }
+dial = { cc = 103, speed_cc = 104 }
+
+# 修飾と軸の組み合わせの個別の切り替え。ここに書いた組み合わせは、上の <軸> の CC では変わらない
 [haptics.control.with.side]
 knob = { cc = 110 }
 
+# 操作と MIDI メッセージの対応 (基本レイヤ)。番号 N は 0〜127
+#   ボタン: note = N で、押下に Note On、解放に Note Off を送る。velocity (1〜127、既定 127) を書ける
+#           note の代わりに cc = N と書くと、押下で値 127、解放で値 0 の CC を送る
+#   回転:   cc = N (必須) の CC を送る。次のキーを書ける
+#           mode:     "absolute" (既定。0〜127 の内部値を増減して送る) | "relative" (1 ノッチの増減量を送る)
+#           step:     1 ノッチの増減量。absolute は 1〜127、relative は 1〜63 (既定 1)
+#           initial:  absolute の内部値の初期値 (0〜127、既定 0)
+#           encoding: relative の符号化。"twos_complement" (既定。+1 は 1、-1 は 127) | "binary_offset" (+1 は 65、-1 は 63)
+#           invert:   true で回転方向を反転する (既定 false)
+#   どの項目も channel = N (1〜16) で [midi] の channel を上書きできる
 [map]
-tall = { note = 60 }                    # ボタン: Note On (押下) と Note Off (解放)。velocity 省略時 127
-top = { cc = 20 }                       # ボタンを CC にする場合: 押下 127、解放 0
-c1 = { note = 62, channel = 2 }         # チャンネルは項目ごとに上書き可
-knob = { cc = 1 }                       # 回転: 絶対 CC (既定)。内部値 0〜127、1 ノッチ 1 ずつ
-scroll = { cc = 2, mode = "relative" }  # 相対 CC。encoding は twos_complement (既定) か binary_offset
-dial = { cc = 3, step = 2, invert = true }
-knob_press = { note = 64 }              # 押込はボタンと同じ扱い (scroll_press、dial_press も同様)
-up = { note = 65 }                      # 十字キーは up、down、left、right
-[map.with.side]                         # Side を押している間だけ有効なレイヤ
+tall = { note = 60 }
+short = { note = 61 }
+top = { note = 62 }
+side = { note = 63 }          # 修飾ボタン自身も通常どおり送る。送らないならこの行を消す
+scroll_press = { note = 64 }  # 押込は scroll_press、knob_press、dial_press
+up = { note = 65 }            # 十字キーは up、down、left、right
+down = { note = 66 }
+left = { note = 67 }
+right = { note = 68 }
+c1 = { note = 69 }
+c2 = { note = 70 }
+tour = { note = 71 }
+knob_press = { note = 72 }
+dial_press = { note = 73 }
+knob = { cc = 1 }                                                     # 絶対 CC
+scroll = { cc = 2, mode = "relative", encoding = "twos_complement" }  # 相対 CC
+dial = { cc = 3, step = 1, invert = false }                           # 絶対 CC
+
+# Side を押している間だけ有効なレイヤ。[map.with.<ボタン>] を書くと、そのボタンが修飾ボタンになる
+# 書いた操作だけが置き換わり、書いていない操作は [map] の割り当てを使う。修飾ボタン自身はここに書けない
+# 同時に有効な修飾ボタンは、先に押した 1 つだけである
+[map.with.side]
 knob = { cc = 11 }
-top = { note = 70 }
+top = { note = 74 }
