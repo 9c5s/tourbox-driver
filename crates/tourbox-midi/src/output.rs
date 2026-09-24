@@ -188,8 +188,10 @@ impl<B: OutputBackend> OutputState<B> {
 
     /// 台帳を保持したまま、ポートを閉じて同じ名前で開き直す。開けなければ次の tick で再試行する。
     fn reopen_keeping_ledger(&mut self) {
+        let id = self.port.as_ref().and_then(|opened| opened.port.port_id());
         info!(
             port = %self.name,
+            id = id.map(display),
             "MIDI 出力ポートを開いてから {} 分が経過したため、開き直します。",
             REOPEN_INTERVAL.as_secs() / 60
         );
