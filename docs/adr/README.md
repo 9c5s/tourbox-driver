@@ -54,3 +54,4 @@
 | [0018](0018-WindowsのMIDIはWinRTバックエンドを使い出力ポートは機器IDで対応付ける.md) | Windows の MIDI は WinRT バックエンドを使い、出力ポートは機器 ID で対応付ける | 承認 | 2026-09-24 |
 | [0019](0019-GitHubActionsの定義はactionlintとzizmorで検査する.md) | GitHub Actions の定義は actionlint と zizmor で検査する | 承認 | 2026-09-24 |
 | [0020](0020-WindowsのMIDI出力ポートは一定時間ごとに開き直す.md) | Windows の MIDI 出力ポートは一定時間ごとに開き直す | 承認 | 2026-09-24 |
+| [0021](0021-WindowsのMIDI出力ポートの定期的な開き直しを取りやめる.md) | Windows の MIDI 出力ポートの定期的な開き直しを取りやめる | 提案 | 2026-09-25 |
