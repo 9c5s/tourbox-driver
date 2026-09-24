@@ -19,6 +19,12 @@ pre-commit:
     - name: lint-adr
       glob: "{docs/adr/**,xtask/**}"
       run: cargo lint-adr
+    - name: actionlint
+      glob: ".github/workflows/**"
+      run: actionlint
+    - name: zizmor
+      glob: ".github/workflows/**"
+      run: zizmor .github/workflows
 
 commit-msg:
   jobs:

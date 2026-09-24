@@ -495,14 +495,19 @@ BLE での複数起動は保証しないので、確認の対象外である。
 
 コミット時のチェックには lefthook を使う。
 lefthook は crates.io で配布されていないため、OS のパッケージマネージャで導入する。
-Windows で動作を確認した lefthook のバージョンは 2.1.14 である。
+GitHub Actions の定義の検査に使う actionlint と zizmor も導入する。
+lefthook は `.github/workflows/` 配下のファイルをステージしたときにこの 2 つを実行するので、導入していないとコミットが失敗する。
+Windows で動作を確認したバージョンは、lefthook 2.1.14、actionlint 1.7.12、zizmor 1.30.1 である。
 
 ```sh
 # Windows
 winget install evilmartians.lefthook
+winget install rhysd.actionlint
+cargo install zizmor
 
 # macOS
 brew install lefthook
+brew install actionlint zizmor
 ```
 
 clone した後に、リポジトリの直下で次のコマンドを 1 回実行してフックを登録する。
@@ -527,6 +532,18 @@ cargo lint-adr
 
 `cargo build` は、テスト用の `fake` feature を含まない出荷構成のコンパイル検査である ([ADR-0015](docs/adr/0015-テスト用のfakefeatureは自己dev-dependencyで有効化しCIでは出荷構成のビルドも検査する.md))。
 `cargo lint-adr` は ADR の形式検査である ([ADR-0012](docs/adr/0012-ADRの形式検査はxtaskで実装する.md))。
+
+加えて、GitHub Actions の定義 (`.github/workflows/`) を次の 2 つで検査する ([ADR-0019](docs/adr/0019-GitHubActionsの定義はactionlintとzizmorで検査する.md))。
+CI では、どちらも Docker のコンテナで動かすため、ubuntu-latest で 1 回だけ実行する。
+
+```sh
+actionlint
+zizmor .github/workflows
+```
+
+actionlint はワークフローの構文と式を検査し、zizmor は権限の広すぎるトークンやピン留めされていないアクションなどのセキュリティ上の問題を検査する。
+ワークフローの `uses:` はコミット SHA (Docker イメージはダイジェスト) で指定し、行末のコメントにバージョンを書く。
+検査は合わせて 7 つであり、lefthook の pre-commit もステージしたファイルに応じて同じ 7 つを実行する。
 
 ### ワークスペースの構成
 

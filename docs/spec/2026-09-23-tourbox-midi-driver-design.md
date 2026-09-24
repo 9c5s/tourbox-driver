@@ -479,8 +479,9 @@ engine は出力ポートの状態を知らない。出力が待機中でも run
 ### 8.2 CI とローカルのチェック
 
 - GitHub Actions で windows-latest と macos-latest の両方で `cargo fmt --check`、`cargo build`、`cargo clippy --all-targets -- -D warnings`、`cargo test`、`cargo lint-adr` の 5 つを実行する。`cargo build` は `fake` feature を含まない出荷構成のコンパイル検査であり (ADR-0015)、`cargo lint-adr` は ADR の形式検査である (ADR-0012)。
-- lefthook をリポジトリに置き、pre-commit で CI と同じ 5 つを実行する。commit-msg で Conventional Commits の形式 (`type: 要約`) を正規表現で検査する。Node などの追加依存は入れない。
-- lefthook は crates.io にないため、Windows は `winget install evilmartians.lefthook`、macOS は `brew install lefthook` で入れる。README に手順とバージョンを書き、clone 後に `lefthook install` を 1 回実行する。
+- GitHub Actions の定義 (`.github/workflows/`) を、`actionlint` (構文と式) と `zizmor .github/workflows` (セキュリティ上の問題) で検査する (ADR-0019)。どちらも Docker のコンテナで動かすため、CI では ubuntu-latest の別ジョブで 1 回だけ実行する。検査は合わせて 7 つになる。ワークフローの `uses:` はコミット SHA (Docker イメージはダイジェスト) で指定し、行末のコメントにバージョンを書く。
+- lefthook をリポジトリに置き、pre-commit で CI と同じ 7 つを実行する。commit-msg で Conventional Commits の形式 (`type: 要約`) を正規表現で検査する。Node などの追加依存は入れない。
+- lefthook は crates.io にないため、Windows は `winget install evilmartians.lefthook`、macOS は `brew install lefthook` で入れる。actionlint と zizmor は、Windows は `winget install rhysd.actionlint` と `cargo install zizmor`、macOS は `brew install actionlint zizmor` で入れる。README に手順とバージョンを書き、clone 後に `lefthook install` を 1 回実行する。
 - pre-commit の所要時間が問題になったら、build と test を pre-push に移す (ADR-0015)。
 
 ## 9. 手動の受け入れ確認
