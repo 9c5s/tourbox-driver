@@ -53,3 +53,4 @@
 | [0017](0017-Transportは切断通知を受信チャネルで届け送信の途中終了を許す.md) | Transport は切断通知を受信チャネルで届け、送信の途中終了を許す | 承認 | 2026-09-23 |
 | [0018](0018-WindowsのMIDIはWinRTバックエンドを使い出力ポートは機器IDで対応付ける.md) | Windows の MIDI は WinRT バックエンドを使い、出力ポートは機器 ID で対応付ける | 承認 | 2026-09-24 |
 | [0019](0019-GitHubActionsの定義はactionlintとzizmorで検査する.md) | GitHub Actions の定義は actionlint と zizmor で検査する | 承認 | 2026-09-24 |
+| [0020](0020-WindowsのMIDI出力ポートは一定時間ごとに開き直す.md) | Windows の MIDI 出力ポートは一定時間ごとに開き直す | 承認 | 2026-09-24 |
