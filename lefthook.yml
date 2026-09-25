@@ -1,0 +1,35 @@
+colors: false
+no_tty: true
+glob_matcher: doublestar
+
+pre-commit:
+  jobs:
+    - name: fmt
+      glob: "{**/*.rs,**/Cargo.toml,rustfmt.toml}"
+      run: cargo fmt --all -- --check
+    - name: build
+      glob: "{**/*.rs,**/Cargo.toml,Cargo.lock}"
+      run: cargo build
+    - name: clippy
+      glob: "{**/*.rs,**/Cargo.toml,Cargo.lock}"
+      run: cargo clippy --all-targets -- -D warnings
+    - name: test
+      glob: "{**/*.rs,**/Cargo.toml,Cargo.lock,docs/protocol/**,config.example.toml}"
+      run: cargo test
+    - name: lint-adr
+      glob: "{docs/adr/**,xtask/**}"
+      run: cargo lint-adr
+    - name: actionlint
+      glob: ".github/workflows/**"
+      run: actionlint
+    - name: zizmor
+      glob: ".github/workflows/**"
+      run: zizmor .github/workflows
+
+commit-msg:
+  jobs:
+    - name: conventional-commits
+      # subject は「type: 要約」の 1 行。scope 記法は使わず、破壊的変更は type! で表す
+      run: >
+        head -1 {1} | grep -Eq '^(build|chore|ci|docs|feat|fix|perf|refactor|revert|style|test)!?: .+' ||
+        { echo 'コミットメッセージは「type: 要約」の形式にしてください (type は build、chore、ci、docs、feat、fix、perf、refactor、revert、style、test)。'; exit 1; }
