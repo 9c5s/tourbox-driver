@@ -1,8 +1,5 @@
 //! MIDI 出力ポートの再試行状態と、Off を送れていない On の台帳。
 
-use std::time::Duration;
-
-use tokio::time::Instant;
 use tracing::{debug, info, warn};
 
 use crate::engine::{Origin, Outgoing};
@@ -66,59 +63,40 @@ impl OutputPort for MidiOut {
     }
 }
 
-/// `Existing` の出力ポートを開き直すまでの時間。
-///
-/// WinRT の出力ポートは、開いてから時間が経つと送信がエラーなしに届かなくなることがある (ADR-0020)。
-const REOPEN_INTERVAL: Duration = Duration::from_secs(60 * 60);
-
 /// 出力ポートの状態 (未接続か接続済み) と台帳。
 ///
-/// 呼び出し側が再試行の周期ごとに [`OutputState::tick`] を呼ぶ。
+/// 時間は持たない。呼び出し側が再試行の周期ごとに [`OutputState::tick`] を呼ぶ。
 pub struct OutputState<B: OutputBackend> {
     backend: B,
     name: String,
     mode: PortMode,
-    /// 現在時刻を返す。
-    clock: Box<dyn Fn() -> Instant>,
     /// None は未接続。
-    port: Option<Opened<B::Port>>,
+    port: Option<B::Port>,
     /// On の送信に成功し、対応する Off をまだ送れていないボタン由来のメッセージ。On を送った順に並べる。
     ledger: Vec<Held>,
 }
 
 impl<B: OutputBackend> OutputState<B> {
-    /// 未接続の状態で作る。最初の [`OutputState::tick`] で開く。`clock` は現在時刻を返す。
-    pub fn new(
-        backend: B,
-        name: String,
-        mode: PortMode,
-        clock: impl Fn() -> Instant + 'static,
-    ) -> Self {
+    /// 未接続の状態で作る。最初の [`OutputState::tick`] で開く。
+    pub fn new(backend: B, name: String, mode: PortMode) -> Self {
         Self {
             backend,
             name,
             mode,
-            clock: Box::new(clock),
             port: None,
             ledger: Vec::new(),
         }
     }
 
-    /// 未接続なら開く。`Existing` の接続中は、開いてから `REOPEN_INTERVAL` が経っていれば開き直し、
-    /// そうでなければ選んだポートの ID が一覧から消えていないかを調べる。
+    /// 未接続なら開き、`Existing` の接続中は選んだポートの ID が一覧から消えていないかを調べる。
     pub fn tick(&mut self) {
-        let Some(opened) = &self.port else {
+        let Some(port) = &self.port else {
             self.connect();
             return;
         };
         if self.mode == PortMode::Virtual {
             return;
         }
-        if (self.clock)().duration_since(opened.at) >= REOPEN_INTERVAL {
-            self.reopen_keeping_ledger();
-            return;
-        }
-        let port = &opened.port;
         match self.backend.list_ports() {
             Ok(ports)
                 if ports
@@ -141,14 +119,14 @@ impl<B: OutputBackend> OutputState<B> {
     /// 接続中なら送り、未接続なら捨てる。送信エラーではポートを閉じて未接続に戻る。
     pub fn send(&mut self, outgoing: Outgoing) {
         let message = outgoing.message;
-        let Some(opened) = &mut self.port else {
+        let Some(port) = &mut self.port else {
             debug!(
                 ?message,
                 "MIDI 出力ポートが未接続のため、メッセージを捨てました。"
             );
             return;
         };
-        match opened.port.send(message) {
+        match port.send(message) {
             Ok(()) => {
                 debug!(
                     ?message,
@@ -186,39 +164,18 @@ impl<B: OutputBackend> OutputState<B> {
         self.disconnect();
     }
 
-    /// 台帳を保持したまま、ポートを閉じて同じ名前で開き直す。開けなければ次の tick で再試行する。
-    fn reopen_keeping_ledger(&mut self) {
-        let id = self.port.as_ref().and_then(|opened| opened.port.port_id());
-        info!(
-            port = %self.name,
-            id = id.map(display),
-            "MIDI 出力ポートを開いてから {} 分が経過したため、開き直します。",
-            REOPEN_INTERVAL.as_secs() / 60
-        );
-        self.disconnect();
-        self.open();
-    }
-
     /// ポートを開き、開けたら台帳の Off を送る。
     fn connect(&mut self) {
-        self.open();
-        if self.port.is_some() && !self.ledger.is_empty() {
-            info!(
-                count = self.ledger.len(),
-                "未接続の間に送れなかったボタンの Off を送ります。"
-            );
-            self.send_ledger_offs();
-        }
-    }
-
-    /// ポートを開き、開いた時刻とともに持つ。開けなければ未接続のままにする。
-    fn open(&mut self) {
         match self.backend.open(&self.name, self.mode) {
             Ok(port) => {
-                self.port = Some(Opened {
-                    port,
-                    at: (self.clock)(),
-                });
+                self.port = Some(port);
+                if !self.ledger.is_empty() {
+                    info!(
+                        count = self.ledger.len(),
+                        "未接続の間に送れなかったボタンの Off を送ります。"
+                    );
+                    self.send_ledger_offs();
+                }
             }
             Err(error) => {
                 warn!("MIDI 出力ポートを開けませんでした。再試行します: {error:#}");
@@ -227,8 +184,8 @@ impl<B: OutputBackend> OutputState<B> {
     }
 
     fn disconnect(&mut self) {
-        if let Some(opened) = self.port.take() {
-            opened.port.close();
+        if let Some(port) = self.port.take() {
+            port.close();
         }
     }
 
@@ -255,12 +212,6 @@ impl<B: OutputBackend> OutputState<B> {
             Origin::Rotation => {}
         }
     }
-}
-
-/// 開いているポートと、開いた時刻。
-struct Opened<P> {
-    port: P,
-    at: Instant,
 }
 
 /// 台帳の項目。On を送ったメッセージのチャンネル、種類、番号。
@@ -454,9 +405,6 @@ pub(crate) mod fake {
 
 #[cfg(test)]
 mod tests {
-    use std::cell::Cell;
-    use std::rc::Rc;
-
     use super::fake::{Call, FakeBackend};
     use super::*;
 
@@ -508,43 +456,9 @@ mod tests {
         Call::Close(port.to_owned())
     }
 
-    fn minutes(count: u64) -> Duration {
-        Duration::from_secs(count * 60)
-    }
-
-    /// テストから進める時計。複製は時刻を共有する。
-    #[derive(Clone)]
-    struct FakeClock(Rc<Cell<Instant>>);
-
-    impl FakeClock {
-        fn new() -> Self {
-            Self(Rc::new(Cell::new(Instant::now())))
-        }
-
-        fn advance(&self, by: Duration) {
-            self.0.set(self.0.get() + by);
-        }
-
-        /// [`OutputState::new`] に渡す、この時計の時刻を返す関数。
-        fn source(&self) -> impl Fn() -> Instant + 'static {
-            let now = Rc::clone(&self.0);
-            move || now.get()
-        }
-    }
-
     /// `PORT` を `Existing` で開いた状態を作り、開くまでの呼び出しの記録を捨てる。
     fn connected(backend: &FakeBackend) -> OutputState<FakeBackend> {
-        connected_on(backend, &FakeClock::new())
-    }
-
-    /// [`connected`] と同じ状態を、`clock` の時刻で開いて作る。
-    fn connected_on(backend: &FakeBackend, clock: &FakeClock) -> OutputState<FakeBackend> {
-        let mut output = OutputState::new(
-            backend.clone(),
-            PORT.to_owned(),
-            PortMode::Existing,
-            clock.source(),
-        );
+        let mut output = OutputState::new(backend.clone(), PORT.to_owned(), PortMode::Existing);
         output.tick();
         assert_eq!(
             backend.take_calls(),
@@ -561,7 +475,6 @@ mod tests {
             backend.clone(),
             "TourBox MIDI".to_owned(),
             PortMode::Existing,
-            Instant::now,
         );
 
         output.tick();
@@ -593,12 +506,8 @@ mod tests {
     fn existing_mode_closes_port_when_it_disappears_from_list() {
         let backend = FakeBackend::openable(PORT);
         backend.set_listed(Some(&["Microsoft GS Wavetable Synth", PORT]));
-        let mut output = OutputState::new(
-            backend.clone(),
-            "loopMIDI".to_owned(),
-            PortMode::Existing,
-            Instant::now,
-        );
+        let mut output =
+            OutputState::new(backend.clone(), "loopMIDI".to_owned(), PortMode::Existing);
         output.tick();
 
         // 設定名 loopMIDI は一覧にないが、選んだポートはある
@@ -639,7 +548,6 @@ mod tests {
             backend.clone(),
             "TourBox MIDI Out".to_owned(),
             PortMode::Existing,
-            Instant::now,
         );
         output.tick();
 
@@ -683,7 +591,6 @@ mod tests {
             backend.clone(),
             "TourBox MIDI".to_owned(),
             PortMode::Virtual,
-            Instant::now,
         );
 
         output.tick();
@@ -774,12 +681,7 @@ mod tests {
     #[test]
     fn failed_button_off_stays_in_ledger_and_is_sent_to_new_port_on_recovery() {
         let backend = FakeBackend::openable("Port A");
-        let mut output = OutputState::new(
-            backend.clone(),
-            "Port".to_owned(),
-            PortMode::Existing,
-            Instant::now,
-        );
+        let mut output = OutputState::new(backend.clone(), "Port".to_owned(), PortMode::Existing);
         output.tick();
         output.send(button_on(note_on(60)));
 
@@ -863,12 +765,8 @@ mod tests {
     #[test]
     fn reopen_sends_ledger_offs_to_old_port_and_empties_ledger() {
         let backend = FakeBackend::openable("Old Port");
-        let mut output = OutputState::new(
-            backend.clone(),
-            "Old Port".to_owned(),
-            PortMode::Existing,
-            Instant::now,
-        );
+        let mut output =
+            OutputState::new(backend.clone(), "Old Port".to_owned(), PortMode::Existing);
         output.tick();
         output.send(button_on(note_on(60)));
         output.send(button_on(cc(20, 127)));
@@ -896,12 +794,8 @@ mod tests {
     #[test]
     fn reopen_empties_ledger_even_when_offs_to_old_port_fail() {
         let backend = FakeBackend::openable("Old Port");
-        let mut output = OutputState::new(
-            backend.clone(),
-            "Old Port".to_owned(),
-            PortMode::Existing,
-            Instant::now,
-        );
+        let mut output =
+            OutputState::new(backend.clone(), "Old Port".to_owned(), PortMode::Existing);
         output.tick();
         output.send(button_on(note_on(60)));
         backend.set_openable(Some("New Port"));
@@ -965,154 +859,6 @@ mod tests {
                 closed(PORT),
             ],
             "渡された Off を送り、台帳に残った On の Off を送ってから閉じる必要があります。"
-        );
-    }
-
-    #[test]
-    fn existing_mode_keeps_port_until_sixty_minutes_after_opening() {
-        let backend = FakeBackend::openable(PORT);
-        let clock = FakeClock::new();
-        let mut output = connected_on(&backend, &clock);
-
-        clock.advance(minutes(60) - Duration::from_secs(1));
-        output.tick();
-
-        assert_eq!(
-            backend.take_calls(),
-            [Call::List],
-            "開いてから 60 分が経つまでは開き直さず、一覧の再評価だけを行う必要があります。"
-        );
-    }
-
-    #[test]
-    fn existing_mode_closes_and_reopens_same_name_sixty_minutes_after_opening() {
-        let backend = FakeBackend::openable(PORT);
-        let clock = FakeClock::new();
-        let mut output = OutputState::new(
-            backend.clone(),
-            "loopMIDI".to_owned(),
-            PortMode::Existing,
-            clock.source(),
-        );
-        output.tick();
-        backend.take_calls();
-
-        clock.advance(minutes(60));
-        output.tick();
-
-        assert_eq!(
-            backend.take_calls(),
-            [closed(PORT), open("loopMIDI", PortMode::Existing)],
-            "開いてから 60 分が経ったら、ポートを閉じてから設定の名前で開き直す必要があります。"
-        );
-    }
-
-    #[test]
-    fn periodic_reopen_keeps_ledger_without_sending_offs() {
-        let backend = FakeBackend::openable(PORT);
-        let clock = FakeClock::new();
-        let mut output = connected_on(&backend, &clock);
-        output.send(button_on(note_on(60)));
-        backend.take_calls();
-
-        clock.advance(minutes(60));
-        output.tick();
-        output.shutdown(Vec::new());
-
-        assert_eq!(
-            backend.take_calls(),
-            [
-                closed(PORT),
-                open(PORT, PortMode::Existing),
-                sent(PORT, note_off(60)),
-                closed(PORT),
-            ],
-            "定期の開き直しでは台帳の Off を送らず、台帳を保持する必要があります。"
-        );
-    }
-
-    #[test]
-    fn failed_periodic_reopen_retries_on_next_tick_and_sends_ledger_offs_on_recovery() {
-        let backend = FakeBackend::openable(PORT);
-        let clock = FakeClock::new();
-        let mut output = connected_on(&backend, &clock);
-        output.send(button_on(note_on(60)));
-        backend.take_calls();
-
-        backend.set_openable(None);
-        clock.advance(minutes(60));
-        output.tick();
-        output.send(button_on(note_on(61)));
-        backend.set_openable(Some(PORT));
-        clock.advance(Duration::from_secs(5));
-        output.tick();
-        // 復帰した時刻から数えるので、次の tick では開き直さない
-        output.tick();
-
-        assert_eq!(
-            backend.take_calls(),
-            [
-                closed(PORT),
-                open(PORT, PortMode::Existing),
-                open(PORT, PortMode::Existing),
-                sent(PORT, note_off(60)),
-                Call::List,
-            ],
-            "開き直しに失敗したら未接続としてメッセージを捨て、次の tick で開けたら台帳の Off を送り、開いた時刻から 60 分を数え直す必要があります。"
-        );
-    }
-
-    #[test]
-    fn virtual_mode_is_not_reopened_periodically() {
-        let backend = FakeBackend::openable("TourBox MIDI");
-        let clock = FakeClock::new();
-        let mut output = OutputState::new(
-            backend.clone(),
-            "TourBox MIDI".to_owned(),
-            PortMode::Virtual,
-            clock.source(),
-        );
-        output.tick();
-
-        clock.advance(minutes(60));
-        output.tick();
-        clock.advance(minutes(60));
-        output.tick();
-        output.send(button_on(note_on(60)));
-
-        assert_eq!(
-            backend.take_calls(),
-            [
-                open("TourBox MIDI", PortMode::Virtual),
-                sent("TourBox MIDI", note_on(60)),
-            ],
-            "Virtual では開いてから 60 分が経っても開き直さない必要があります。"
-        );
-    }
-
-    #[test]
-    fn periodic_reopen_repeats_sixty_minutes_after_previous_reopen() {
-        let backend = FakeBackend::openable(PORT);
-        let clock = FakeClock::new();
-        let mut output = connected_on(&backend, &clock);
-
-        clock.advance(minutes(60));
-        output.tick();
-        clock.advance(minutes(60) - Duration::from_secs(1));
-        output.tick();
-        clock.advance(Duration::from_secs(1));
-        output.tick();
-
-        assert_eq!(
-            backend.take_calls(),
-            [
-                closed(PORT),
-                open(PORT, PortMode::Existing),
-                Call::List,
-                closed(PORT),
-                open(PORT, PortMode::Existing),
-            ],
-            "開き直した時刻から 60 分が経つごとに、再び開き直す必要があります。"
         );
     }
 }
